@@ -20,7 +20,6 @@ GROUP_ID = -1003928341140
 CHANNEL_USERNAME = "@esimjwf" 
 ADMIN_ID = 1294583646
 
-
 app = FastAPI()
 telegram_app = None
 
