@@ -282,30 +282,30 @@ async def process_xl_esim(chat_id, status_callback):
                 logger.info("Menunggu OTP...")
                 await status_callback(f"⏳ [LOG: 7/7] Menunggu OTP masuk ke `{temp.email}`...")
                 otp = await temp.fetch_otp(timeout=60)
-            
-            if not otp: 
-                await page.screenshot(path=debug_path)
-                raise Exception("Error: Waktu tunggu OTP habis (Timeout).")
-            
-            logger.info(f"Input OTP: {otp}")
-            await status_callback(f"✅ [LOG: OTP OK] Kode: `{otp}`. Memasukkan ke sistem...")
-            
-            try:
-                await page.locator("input").first.click()
-                await asyncio.sleep(0.5)
-            except Exception:
-                pass
-            
-            await page.keyboard.type(otp, delay=150)
-            await asyncio.sleep(0.8)
 
-            logger.info("Konfirmasi OTP...")
-            await status_callback("📤 [LOG: Konfirmasi OTP] Menekan tombol Lanjut...")
-            await asyncio.sleep(1.5)
-            try:
-                await page.get_by_role("button", name="Lanjut").click(timeout=10000)
-            except Exception:
-                await page.click("button:has-text('Lanjut'), button:has-text('Konfirmasi')")
+                if not otp:
+                    await page.screenshot(path=debug_path)
+                    raise Exception("Error: Waktu tunggu OTP habis (Timeout).")
+
+                logger.info(f"Input OTP: {otp}")
+                await status_callback(f"✅ [LOG: OTP OK] Kode: `{otp}`. Memasukkan ke sistem...")
+
+                try:
+                    await page.locator("input").first.click()
+                    await asyncio.sleep(0.5)
+                except Exception:
+                    pass
+
+                await page.keyboard.type(otp, delay=150)
+                await asyncio.sleep(0.8)
+
+                logger.info("Konfirmasi OTP...")
+                await status_callback("📤 [LOG: Konfirmasi OTP] Menekan tombol Lanjut...")
+                await asyncio.sleep(1.5)
+                try:
+                    await page.get_by_role("button", name="Lanjut").click(timeout=10000)
+                except Exception:
+                    await page.click("button:has-text('Lanjut'), button:has-text('Konfirmasi')")
 
             logger.info("Pilih nomor...")
             await status_callback("📱 [LOG: 6/7] Menunggu dan memilih nomor eSIM...")
