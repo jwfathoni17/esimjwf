@@ -235,12 +235,24 @@ async def process_xl_esim(chat_id, status_callback, email=None):
                 await lanjut_button.scroll_into_view_if_needed()
                 if not await lanjut_button.is_enabled():
                     raise Exception("Tombol Lanjut masih nonaktif")
-                try:
-                    await lanjut_button.click(timeout=15000)
-                except Exception:
-                    logger.warning("Klik Playwright gagal, mencoba event click pada tombol DOM")
-                    await lanjut_button.evaluate("button => button.click()")
+
+                button_box = await lanjut_button.bounding_box()
+                if not button_box:
+                    raise Exception("Posisi tombol Lanjut tidak tersedia")
+
+                await lanjut_button.evaluate("button => button.click()")
                 await asyncio.sleep(1)
+
+                if await lanjut_button.is_visible():
+                    logger.warning("Klik DOM belum berpindah halaman, mencoba klik koordinat tombol")
+                    await page.mouse.click(
+                        button_box["x"] + button_box["width"] / 2,
+                        button_box["y"] + button_box["height"] / 2
+                    )
+                    await asyncio.sleep(1)
+
+                if await lanjut_button.is_visible():
+                    raise Exception("Event tombol Lanjut tidak mengubah halaman")
             except Exception as e:
                 button_html = "tidak tersedia"
                 if await lanjut_button.count() > 0:
