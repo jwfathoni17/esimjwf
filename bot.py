@@ -19,28 +19,18 @@ GROUP_ID = int(os.getenv("GROUP_ID", "-1003928341140"))
 CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "@esimjwf")
 ADMIN_ID = 1294583646
 
-# --- RapidAPI Temporary Gmail Account specific config ---
-RAPIDAPI_KEY = (
-    os.getenv("RAPIDAPI_KEY")
-    or os.getenv("APIKEY_MASTER")
-    or os.getenv("RUN2MAIL_API_KEY")
-    or os.getenv("TEMPMAIL_API_KEY")
-    or ""
-).strip()
-
-RAPIDAPI_HOST = (
-    os.getenv("RAPIDAPI_HOST")
+# --- temp.tf disposable email config ---
+TEMP_TF_BASE_URL = (
+    os.getenv("TEMP_TF_BASE_URL")
     or os.getenv("EMAIL_PROVIDER_BASE_URL")
     or os.getenv("RUN2MAIL_BASE_URL")
     or os.getenv("TEMPMAIL_BASE_URL")
-    or "gmailnator.p.rapidapi.com"
-).strip().replace("https://", "").replace("http://", "").rstrip("/")
+    or "https://temp.tf"
+).strip().rstrip("/")
 
-# Force the bot to use the active provider when stale env vars still point to old temporary-mail APIs.
-if any(v in RAPIDAPI_HOST.lower() for v in ("temporary-gmail-account", "run2mail", "tempmail", "free-gmail-api")):
-    RAPIDAPI_HOST = "gmailnator.p.rapidapi.com"
-
-EMAIL_PROVIDER_BASE_URL = f"https://{RAPIDAPI_HOST}"
+RAPIDAPI_HOST = TEMP_TF_BASE_URL.replace("https://", "").replace("http://", "")
+RAPIDAPI_KEY = (os.getenv("RAPIDAPI_KEY") or os.getenv("APIKEY_MASTER") or "").strip()
+EMAIL_PROVIDER_BASE_URL = TEMP_TF_BASE_URL
 EMAIL_ACCOUNT = os.getenv("EMAIL_ACCOUNT") or os.getenv("RUN2MAIL_EMAIL") or ""
 EMAIL_INBOX_ID = os.getenv("EMAIL_INBOX_ID") or os.getenv("RUN2MAIL_INBOX_ID") or ""
 
@@ -137,13 +127,11 @@ class Run2MailBot:
         base = self.base_url.rstrip("/")
         if kind == "create":
             return [
-                f"{base}/api/emails/generate",
-                f"{base}/generate-email",
+                f"{base}/api/account",
             ]
         if kind == "messages":
             return [
-                f"{base}/api/inbox/",
-                f"{base}/message-list",
+                f"{base}/api/check",
             ]
         return [base]
 
@@ -200,113 +188,49 @@ class Run2MailBot:
             logger.info(f"Inbox email yang dipakai: {self.email}")
             return
 
-        if not self.api_key:
-            raise RuntimeError("RAPIDAPI_KEY belum diisi di Railway / environment.")
-
-        payload = {"type": ["public_gmail_dot", "private_gmail_dot"]}
-        last_error = None
         attempts = 0
-
         while attempts < 10:
             attempts += 1
-            for url in self._candidate_urls("create"):
-                try:
-                    logger.info("Mencoba generate inbox via RapidAPI endpoint: %s", url)
-                    resp = await self._request("POST", url, json=payload)
-                    email = self._extract_email_from_payload(resp)
-                    token = self._extract_token_from_payload(resp)
+            url = self._candidate_urls("create")[0]
+            try:
+                logger.info("Generate email via temp.tf: %s", url)
+                params = {"dot": 1, "plus": 1, "providers": "gmail"}
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url, params=params, timeout=30) as r:
+                        data = await r.json(content_type=None)
+                email = data.get("email") if isinstance(data, dict) else None
+                if not email:
+                    raise RuntimeError(f"temp.tf tidak mengembalikan email. Response: {data}")
 
-                    if not email:
-                        last_error = resp
-                        logger.warning("Response dari %s tidak mengandung email: %s", url, resp)
-                        continue
-
-                    if "+" in email.split("@", 1)[0]:
-                        logger.warning(
-                            "Email temporari hasil RapidAPI mengandung '+' (%s). Membatalkan dan generate ulang inbox baru.",
-                            email,
-                        )
-                        if status_callback:
-                            await status_callback(
-                                f"⚠️ [EMAIL] Inbox hasil RapidAPI mengandung '+' ({email}). Membatalkan dan generate ulang inbox baru..."
-                            )
-                        last_error = {"reason": "plus_sign_detected", "email": email}
-                        break
-
-                    if token:
-                        self.token = token
-                    self.email = email
-                    logger.info("Inbox email dibuat dari Temporary Gmail Account: %s", self.email)
-                    return
-                except Exception as e:
-                    last_error = {"error": str(e), "url": url}
-
-            if last_error and isinstance(last_error, dict) and last_error.get("reason") == "plus_sign_detected":
-                logger.info("Retry generate account karena email mengandung '+'; percobaan ke-%s/10", attempts)
+                if "+" in email.split("@", 1)[0]:
+                    logger.info("Email temp.tf valid dan menggunakan plus alias: %s", email)
+                self.email = email
+                logger.info("Inbox email dibuat dari temp.tf: %s", self.email)
+                return
+            except Exception as e:
+                logger.warning("Create temp.tf account gagal, retrying... detail=%s", e)
                 if status_callback:
-                    await status_callback(
-                        f"🔄 [EMAIL] Mencoba generate inbox baru karena email invalid: {last_error.get('email')} (percobaan {attempts}/10)"
-                    )
+                    await status_callback(f"⚠️ [EMAIL] Generate inbox temp.tf gagal, retrying... detail: {e}")
                 await asyncio.sleep(1)
-                continue
 
-            if last_error and isinstance(last_error, dict) and last_error.get("error"):
-                logger.warning("Create account gagal, retrying... detail=%s", last_error)
-                if status_callback:
-                    await status_callback(f"⚠️ [EMAIL] Generate inbox gagal, retrying... detail: {last_error}")
-                await asyncio.sleep(1)
-                continue
-
-            break
-
-        raise RuntimeError(f"Temporary Gmail Account gagal membuat inbox. Response: {last_error}")
+        raise RuntimeError(f"temp.tf gagal membuat inbox setelah 10 percobaan.")
 
     async def _get_messages(self):
         if not self.email:
             await self.create_account()
 
-        payload = {"email": self.email, "limit": 20}
-        last_error = None
-
-        for url in self._candidate_urls("messages"):
-            try:
-                resp = await self._request("POST", url, json=payload)
-                items = self._extract_messages_from_payload(resp)
-                if items:
-                    detailed = []
-                    for item in items:
-                        message_id = self._extract_message_id(item)
-                        if message_id:
-                            detail = await self._get_message_details(message_id)
-                            if detail:
-                                detailed.append(detail)
-                                continue
-                        detailed.append(item)
-                    return detailed
-                last_error = resp
-            except Exception as e:
-                last_error = {"error": str(e), "url": url}
-
-        return []
-
-    async def _get_message_details(self, message_id):
-        if not message_id:
-            return {}
-
-        base = self.base_url.rstrip("/")
-        url = f"{base}/api/inbox/{message_id}"
+        url = self._candidate_urls("messages")[0]
         try:
-            resp = await self._request("GET", url)
-            if isinstance(resp, dict) and (
-                "content" in resp
-                or "subject" in resp
-                or "from" in resp
-                or "id" in resp
-            ):
-                return resp
-        except Exception:
-            pass
-        return {}
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json={"email": self.email}, timeout=30) as r:
+                    data = await r.json(content_type=None)
+            if isinstance(data, dict):
+                messages = data.get("data") or data.get("messages") or []
+                if isinstance(messages, list):
+                    return messages
+        except Exception as e:
+            logger.warning("Gagal fetch inbox temp.tf: %s", e)
+        return []
 
     async def fetch_otp(self, timeout=60):
         start_time = asyncio.get_event_loop().time()
@@ -315,10 +239,10 @@ class Run2MailBot:
                 messages = await self._get_messages()
                 for msg in messages:
                     raw_text = self._normalize_text(
-                        msg.get('content')
+                        msg.get('body')
+                        or msg.get('content')
                         or msg.get('refined_content')
                         or msg.get('text')
-                        or msg.get('body')
                         or msg.get('plain')
                         or ''
                     )
@@ -399,7 +323,7 @@ async def process_xl_esim(chat_id, status_callback):
 
     full_name = f"mhmdsari{''.join(random.choices(string.ascii_lowercase + string.digits, k=4))}xlstore"
     whatsapp = "08" + ''.join(random.choices(string.digits, k=9))
-    
+
     screenshot_path = f"esim_{chat_id}.png"
     debug_path = f"debug_{chat_id}.png"
 
@@ -412,10 +336,10 @@ async def process_xl_esim(chat_id, status_callback):
             viewport={"width": 1440, "height": 1200},
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
         )
-        
+
         try:
-            logger.info("Membuka halaman XL...")
-            await status_callback("🌐 [LOG: 1/7] Membuka halaman XL eSIM Trial...")
+            logger.info("Membuka halaman XL claim...")
+            await status_callback("🌐 Membuka halaman XL eSIM Trial...")
             await page.goto("https://www.xl.co.id/esim-trial/claim", timeout=90000, wait_until="domcontentloaded")
 
             try:
@@ -423,172 +347,156 @@ async def process_xl_esim(chat_id, status_callback):
             except Exception:
                 pass
 
-            logger.info("Klik mulai...")
-            await status_callback("🖱️ [LOG: 2/7] Klik tombol mulai...")
             try:
-                await page.wait_for_selector("text=Mulai Isi Data", timeout=20000)
-                await page.get_by_text("Mulai Isi Data").first.click()
-            except Exception:
-                await page.click("button:has-text('Mulai Isi Data')", timeout=5000)
-            
-            await asyncio.sleep(2)
-
-            logger.info("Isi data...")
-            await status_callback("📝 [LOG: 3/7] Mengisi data diri otomatis...")
-            try:
-                await page.get_by_label("Nama Lengkap").fill(full_name)
-                await page.get_by_label("Email").fill(temp.email)
-                await page.get_by_label("Nomor WhatsApp").fill(whatsapp)
-
-                checkbox = page.get_by_role("checkbox")
-                await checkbox.wait_for(state="visible", timeout=10000)
-                await checkbox.check(timeout=10000)
-                await page.wait_for_function("() => { const cb = document.querySelector('input[type=\"checkbox\"]'); return cb && cb.checked; }", timeout=10000)
-            except Exception:
-                try:
-                    inputs = await page.locator("input").all()
-                    if len(inputs) >= 3:
-                        await inputs[0].fill(full_name)
-                        await inputs[1].fill(temp.email)
-                        await inputs[2].fill(whatsapp)
-                    else:
-                        raise Exception("Gagal mendeteksi input form")
-                    checkbox = page.get_by_role("checkbox")
-                    await checkbox.check(timeout=10000)
-                    await page.wait_for_function("() => { const cb = document.querySelector('input[type=\"checkbox\"]'); return cb && cb.checked; }", timeout=10000)
-                except Exception:
-                    await page.evaluate("""() => {
-                        const inputs = Array.from(document.querySelectorAll('input'));
-                        const fullName = inputs.find(el => el.labels && Array.from(el.labels).some(l => l.innerText.includes('Nama Lengkap')));
-                        const email = inputs.find(el => el.labels && Array.from(el.labels).some(l => l.innerText.includes('Email')));
-                        const wa = inputs.find(el => el.labels && Array.from(el.labels).some(l => l.innerText.includes('Nomor WhatsApp')));
-                        if (fullName) fullName.value = arguments[0];
-                        if (email) email.value = arguments[1];
-                        if (wa) wa.value = arguments[2];
-                        const checkbox = Array.from(document.querySelectorAll('input[type="checkbox"]'))[0];
-                        if (checkbox) {
-                            checkbox.checked = true;
-                            checkbox.dispatchEvent(new Event('change', { bubbles: true }));
-                        }
-                    }""", full_name, temp.email, whatsapp)
-
-            logger.info("Kirim OTP...")
-            await status_callback("📤 [LOG: 4/7] Mengirim permintaan OTP...")
-
-            try:
-                await page.wait_for_function("() => { const btn = Array.from(document.querySelectorAll('button, [role=\"button\"]')).find(el => (el.innerText || '').trim().toLowerCase().includes('lanjut')); return !!btn && !btn.disabled; }", timeout=15000)
+                await page.get_by_text("Mulai Isi Data", exact=True).click(timeout=15000)
             except Exception:
                 pass
 
+            logger.info("Mengisi 3 form: Nama Lengkap, Email, Nomor WhatsApp")
+            await status_callback("📝 Mengisi Nama Lengkap, Email, dan Nomor WhatsApp...")
+            await page.get_by_label("Nama Lengkap").fill(full_name)
+            await page.get_by_label("Email").fill(temp.email)
+            await page.get_by_label("Nomor WhatsApp").fill(whatsapp)
+
+            logger.info("Centang syarat dan ketentuan")
+            await status_callback("✅ Mencentang syarat & ketentuan...")
             try:
-                await page.locator("button:has-text('Lanjut'), button:has-text('Kirim'), button:has-text('Lanjutkan')").first.click(timeout=20000)
+                await page.locator("input[type='checkbox']").last.check(timeout=10000)
             except Exception:
                 await page.evaluate("""() => {
-                    const btn = Array.from(document.querySelectorAll('button, [role="button"], a'))
-                        .find(el => {
-                            const text = (el.innerText || '').trim();
-                            return text.toLowerCase().includes('lanjut') || text.toLowerCase().includes('kirim') || text.toLowerCase().includes('lanjutkan');
-                        });
-                    if (btn) {
-                        btn.click();
-                        btn.dispatchEvent(new Event('click', { bubbles: true }));
+                    const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
+                    const target = checkboxes.find(cb => {
+                        const text = (cb.closest('label')?.innerText || cb.parentElement?.innerText || '').toLowerCase();
+                        return text.includes('syarat') || text.includes('ketentuan');
+                    }) || checkboxes[0];
+                    if (target) {
+                        target.checked = true;
+                        target.dispatchEvent(new Event('change', { bubbles: true }));
                     }
                 }""")
 
-            await asyncio.sleep(2)
-            await page.screenshot(path=debug_path)
+            logger.info("Tekan lanjut")
+            await status_callback("➡️ Menekan tombol Lanjut...")
+            next_btn = page.locator("button:has-text('Lanjut'), button:has-text('Kirim'), button:has-text('Lanjutkan')").first
+            await next_btn.click(timeout=20000)
 
-            logger.info("Menunggu OTP...")
-            await status_callback(f"⏳ [LOG: 5/7] Menunggu OTP masuk ke `{temp.email}`...")
-            otp = await temp.fetch_otp(timeout=60)
-            
-            if not otp: 
-                await page.screenshot(path=debug_path)
-                raise Exception("Error: Waktu tunggu OTP habis (Timeout).")
-            
-            logger.info(f"Input OTP: {otp}")
-            await status_callback(f"✅ [LOG: OTP OK] Kode: `{otp}`. Memasukkan ke sistem...")
-            
+            popup_detected = False
+            for _ in range(20):
+                try:
+                    popup = page.locator("text=/email.*sudah.*digunakan|email.*already.*used|already used|email used/i").first
+                    if await popup.count() > 0:
+                        popup_detected = True
+                        break
+                except Exception:
+                    pass
+                await asyncio.sleep(0.5)
+
+            if popup_detected:
+                logger.warning("Popup email sudah digunakan muncul. Mengganti email saja.")
+                await status_callback("⚠️ Email sudah digunakan. Mengganti email lain dan melanjutkan...")
+
+                close_btn = page.locator("button:has-text('x'), [aria-label='Close'], [data-dismiss='alert']").first
+                try:
+                    if await close_btn.count() > 0:
+                        await close_btn.click(timeout=5000)
+                except Exception:
+                    pass
+
+                temp.email = ""
+                await temp.create_account(status_callback=status_callback)
+                logger.info("Email baru setelah popup: %s", temp.email)
+                await page.get_by_label("Email").fill(temp.email)
+
+                try:
+                    await page.locator("input[type='checkbox']").last.check(timeout=10000)
+                except Exception:
+                    await page.evaluate("""() => {
+                        const list = Array.from(document.querySelectorAll('input[type="checkbox"]'));
+                        const target = list.find(cb => {
+                            const text = (cb.closest('label')?.innerText || cb.parentElement?.innerText || '').toLowerCase();
+                            return text.includes('syarat') || text.includes('ketentuan');
+                        }) || list[0];
+                        if (target) {
+                            target.checked = true;
+                            target.dispatchEvent(new Event('change', { bubbles: true }));
+                        }
+                    }""")
+
+                await next_btn.click(timeout=20000)
+
+            logger.info("Menunggu kode 6 digit masuk ke email temporari")
+            await status_callback(f"⏳ Menunggu kode 6 digit masuk ke email temporari: {temp.email}")
+            otp = await temp.fetch_otp(timeout=90)
+            if not otp:
+                raise Exception("Timeout: kode 6 digit tidak diterima di email temporari.")
+
+            logger.info(f"Kode OTP diterima: {otp}")
+            await status_callback(f"✅ Kode OTP diterima: {otp}. Memasukkan ke halaman...")
             try:
-                await page.locator("input").first.click()
+                otp_input = page.locator("input[type='text'], input[type='tel'], input").first
+                await otp_input.click(timeout=10000)
+                await page.keyboard.type(otp, delay=150)
             except Exception:
-                pass
-            
-            await page.keyboard.type(otp, delay=150)
+                await page.evaluate("""(otp) => {
+                    const input = Array.from(document.querySelectorAll('input')).find(el => {
+                        const value = (el.value || '').replace(/\s+/g, '');
+                        return value.length <= 6 || el.type === 'tel' || el.type === 'text';
+                    });
+                    if (input) {
+                        input.focus();
+                        input.value = otp;
+                        input.dispatchEvent(new Event('input', { bubbles: true }));
+                        input.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                }""", otp)
 
-            logger.info("Konfirmasi OTP...")
-            await status_callback("📤 [LOG: Konfirmasi OTP] Menekan tombol Lanjut...")
-            await asyncio.sleep(1.5)
+            logger.info("Tekan lanjut setelah OTP")
+            await status_callback("➡️ Menekan tombol Lanjut setelah memasukkan kode OTP...")
+            await page.locator("button:has-text('Lanjut'), button:has-text('Konfirmasi'), button:has-text('Lanjutkan')").first.click(timeout=20000)
+
+            logger.info("Memilih nomor esim paling pertama")
+            await status_callback("📱 Memilih nomor eSIM yang paling pertama...")
             try:
-                await page.locator("button:has-text('Lanjut'), button:has-text('Konfirmasi'), button:has-text('Lanjutkan')").first.click(timeout=20000)
+                await page.locator("input[type='radio']").first.check(timeout=20000)
             except Exception:
                 await page.evaluate("""() => {
-                    const btn = Array.from(document.querySelectorAll('button, [role="button"], a'))
-                        .find(el => {
-                            const text = (el.innerText || '').trim();
-                            return text.toLowerCase().includes('lanjut') || text.toLowerCase().includes('konfirmasi') || text.toLowerCase().includes('lanjutkan');
-                        });
-                    if (btn) btn.click();
+                    const radios = Array.from(document.querySelectorAll('input[type="radio"]'));
+                    if (radios.length > 0) {
+                        radios[0].checked = true;
+                        radios[0].dispatchEvent(new Event('change', { bubbles: true }));
+                        return;
+                    }
+                    const cards = Array.from(document.querySelectorAll('label, div, button, span')).filter(el => {
+                        const text = (el.innerText || '').trim();
+                        return text.startsWith('08') || text.includes('08');
+                    });
+                    if (cards.length > 0) cards[0].click();
                 }""")
 
-            logger.info("Pilih nomor...")
-            await status_callback("📱 [LOG: 6/7] Menunggu dan memilih nomor eSIM...")
-            
-            try:
-                await page.wait_for_selector('input[type="radio"], label, .number-card, text=/08/', timeout=30000)
-            except Exception:
-                logger.warning("Timeout menunggu elemen pilihan nomor, mencoba lanjut paksa via evaluate...")
+            logger.info("Tekan lanjut untuk konfirmasi nomor esim")
+            await status_callback("➡️ Menekan tombol Lanjut pada pilihan nomor eSIM...")
+            await page.locator("button:has-text('Lanjut'), button:has-text('Pilih'), button:has-text('Lanjutkan')").first.click(timeout=20000)
 
-            await asyncio.sleep(3) 
-            
-            await page.evaluate("""() => {
-                const radios = Array.from(document.querySelectorAll('input[type="radio"]'));
-                if (radios.length > 0) {
-                    radios[0].checked = true;
-                    radios[0].click();
-                    radios[0].dispatchEvent(new Event('change', { bubbles: true }));
-                    return;
-                }
-                const candidates = Array.from(document.querySelectorAll('div, label, span, button')).filter(el => {
-                    const text = el.innerText ? el.innerText.trim() : '';
-                    return text.startsWith('08') && text.length >= 10 && text.length <= 15 && el.children.length <= 2;
-                });
-                if (candidates.length > 0) {
-                    candidates[0].click();
-                }
-            }""")
-
-            logger.info("Lanjut ke QR...")
-            await status_callback("📤 [LOG: 7/7] Menekan tombol Lanjut...")
-            await asyncio.sleep(2)
-
-            await page.evaluate("""() => {
-                const btns = Array.from(document.querySelectorAll('button, div[role="button"]'));
-                const target = btns.find(b => b.innerText && (b.innerText.toLowerCase().includes('lanjut') || b.innerText.toLowerCase().includes('konfirmasi') || b.innerText.toLowerCase().includes('pilih')));
-                if (target) {
-                    target.click();
-                }
-            }""")
-
-            logger.info("Proses akhir QR...")
-            await status_callback("⏳ Sedang memproses eSIM di server XL (Menunggu QR & Email)...")
-            await asyncio.sleep(10) 
-            
-            await status_callback("✨ QR Code berhasil dimuat! Mengambil screenshot & membaca detail email...")
+            logger.info("Halaman eSIM sudah siap")
+            await status_callback("✨ Halaman eSIM sudah siap. Mengambil screenshot...")
             await page.screenshot(path=screenshot_path, full_page=True)
+
+            info, ms, pk, sm, ac = await temp.fetch_xl_confirmation_email(timeout=60)
+            if info is None:
+                info = "✅ eSIM sudah siap. Screenshot berhasil diambil."
+
             await browser.close()
-            
             if os.path.exists(debug_path):
                 os.remove(debug_path)
-                
-            info, ms, pk, sm, ac = await temp.fetch_xl_confirmation_email(timeout=60)
-                
             return screenshot_path, info, ms, pk, sm, ac
 
         except Exception as e:
             logger.error(f"Error di proses utama: {e}")
             try:
                 await page.screenshot(path=debug_path)
+            except Exception:
+                pass
+            try:
                 await browser.close()
             except Exception:
                 pass
