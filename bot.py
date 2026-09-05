@@ -55,6 +55,12 @@ async def dismiss_cookie_popup(page):
         except Exception as e:
             logger.warning(f"Popup cookie ditemukan tetapi gagal ditutup: {e}")
 
+async def security_verification_failed(page):
+    message = page.get_by_text(
+        re.compile(r"Verifikasi keamanan gagal|security verification failed", re.IGNORECASE)
+    ).first
+    return await message.count() > 0 and await message.is_visible()
+
 async def is_user_joined(context, user_id):
     try:
         member = await context.bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
@@ -241,7 +247,12 @@ async def process_xl_esim(chat_id, status_callback, email=None):
                     raise Exception("Posisi tombol Lanjut tidak tersedia")
 
                 await lanjut_button.evaluate("button => button.click()")
-                await asyncio.sleep(1)
+                await asyncio.sleep(2)
+
+                if await security_verification_failed(page):
+                    raise Exception(
+                        "XL menolak verifikasi keamanan; diperlukan verifikasi pengguna nyata"
+                    )
 
                 if await lanjut_button.is_visible():
                     logger.warning("Klik DOM belum berpindah halaman, mencoba klik koordinat tombol")
@@ -250,6 +261,11 @@ async def process_xl_esim(chat_id, status_callback, email=None):
                         button_box["y"] + button_box["height"] / 2
                     )
                     await asyncio.sleep(1)
+
+                    if await security_verification_failed(page):
+                        raise Exception(
+                            "XL menolak verifikasi keamanan setelah percobaan ulang"
+                        )
 
                 if await lanjut_button.is_visible():
                     raise Exception("Event tombol Lanjut tidak mengubah halaman")
