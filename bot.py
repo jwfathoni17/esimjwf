@@ -235,8 +235,10 @@ async def process_xl_esim(chat_id, status_callback):
                     await page.click("button:has-text('Lanjut'), button:has-text('Kirim')")
                     await asyncio.sleep(1.2)
 
-                popup = page.get_by_text(re.compile(r"Email ini sudah pernah digunakan.*free trial eSIM|sudah pernah digunakan.*free trial eSIM", re.IGNORECASE))
-                if await popup.first.is_visible(timeout=4000):
+                popup_email_used = page.get_by_text(re.compile(r"Email ini sudah pernah digunakan.*free trial eSIM|sudah pernah digunakan.*free trial eSIM", re.IGNORECASE))
+                popup_security_failed = page.get_by_text(re.compile(r"Verifikasi keamanan gagal|keamanan gagal.*coba lagi", re.IGNORECASE))
+
+                if await popup_email_used.first.is_visible(timeout=4000):
                     if chat_id in stop_email_flags:
                         logger.info(f"User memutuskan berhenti saat popup email duplikat di chat {chat_id}")
                         await status_callback("🛑 [STOP EMAIL] Proses dihentikan sebelum retry berikutnya.")
@@ -246,7 +248,7 @@ async def process_xl_esim(chat_id, status_callback):
                     email_retry_count += 1
                     logger.warning(f"Popup email sudah pernah digunakan terdeteksi. Retry email ke-{email_retry_count}")
                     await status_callback(
-                        f"⚠️ [RETRY EMAIL {email_retry_count}] Email sudah pernah digunakan. Membuat email baru dan mengganti email saja..."
+                        f"⚠️ [RETRY EMAIL {email_retry_count}] Teks popup: 'Email ini sudah pernah digunakan untuk mendaftar free trial eSIM.' Membuat email baru dan mengganti email saja..."
                     )
 
                     try:
@@ -278,6 +280,19 @@ async def process_xl_esim(chat_id, status_callback):
                         await page.reload(wait_until="domcontentloaded")
                         await asyncio.sleep(1.5)
                         continue
+
+                if await popup_security_failed.first.is_visible(timeout=4000):
+                    logger.warning("Popup 'Verifikasi keamanan gagal. Silakan coba lagi.' terdeteksi. Reload dan ulang dari form.")
+                    await status_callback("⚠️ [RETRY SECURITY] Teks popup: 'Verifikasi keamanan gagal. Silakan coba lagi.' Reload halaman dan ulang proses dengan delay pendek...")
+
+                    try:
+                        await page.locator("button[aria-label='Tutup'], [aria-label='Close'], button:has-text('X'), button:has-text('✕'), text='×'").first.click(timeout=3000)
+                    except Exception:
+                        pass
+
+                    await page.reload(wait_until="domcontentloaded")
+                    await asyncio.sleep(2.0)
+                    continue
 
                 logger.info("Menunggu OTP...")
                 await status_callback(f"⏳ [LOG: 7/7] Menunggu OTP masuk ke `{temp.email}`...")
