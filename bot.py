@@ -7,7 +7,7 @@ import aiohttp
 import logging
 from fastapi import FastAPI, Request, Response
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 from playwright.async_api import async_playwright
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -24,10 +24,21 @@ telegram_app = None
 
 # Variabel global untuk melacak status loop aktif per chat/user
 active_loops = set()
+manual_email_pending = set()
 
 def sensor_text(text):
     if not text or len(text) <= 3: return "***"
     return text[:-3] + "***"
+
+def claim_menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🚀 Mulai Claim Esim", callback_data="start_claim")],
+        [InlineKeyboardButton("✍️ Manual Esim", callback_data="manual_esim")],
+        [InlineKeyboardButton("🔄 Claim Loop", callback_data="start_claim_loop")],
+        [InlineKeyboardButton("💰 Support Owner", callback_data="donation")],
+        [InlineKeyboardButton("🎦 Bot Alight Motion", url="https://t.me/amforariey_bot")],
+        [InlineKeyboardButton("🗨️ Channel Update", url="https://t.me/forarieyproject")]
+    ])
 
 async def is_user_joined(context, user_id):
     try:
@@ -60,7 +71,7 @@ class GmailifyBot:
                 return [item for item in items if item.get("success", True)]
 
     async def create_account(self):
-        result = await self._call_api({"action": "generate_email", "provider": "gmail"})
+        result = await self._call_api({"endpoint": "generate", "provider": "gmail"})
         if result:
             self.email = result[0].get('email', '')
         if not self.email:
@@ -71,7 +82,7 @@ class GmailifyBot:
         start_time = asyncio.get_event_loop().time()
         while (asyncio.get_event_loop().time() - start_time) < timeout:
             try:
-                result = await self._call_api({"action": "check_emails", "email": self.email})
+                result = await self._call_api({"endpoint": "check-emails", "email": self.email})
                 if result:
                     for item in result:
                         subject = item.get('subject', '') or ''
@@ -93,7 +104,7 @@ class GmailifyBot:
         start_time = asyncio.get_event_loop().time()
         while (asyncio.get_event_loop().time() - start_time) < timeout:
             try:
-                result = await self._call_api({"action": "check_emails", "email": self.email})
+                result = await self._call_api({"endpoint": "check-emails", "email": self.email})
                 if result:
                     for item in result:
                         subject = item.get('subject', '') or ''
@@ -130,9 +141,13 @@ class GmailifyBot:
             await asyncio.sleep(2)
         return f"Email konfirmasi dari XL belum diterima / timeout, akun terdaftar: {self.email}", None, None, None, None
 
-async def process_xl_esim(chat_id, status_callback):
+async def process_xl_esim(chat_id, status_callback, email=None):
     temp = GmailifyBot()
-    await temp.create_account()
+    if email:
+        temp.email = email
+        logger.info(f"Menggunakan email manual: {temp.email}")
+    else:
+        await temp.create_account()
 
     full_name = f"mhmdsari{''.join(random.choices(string.ascii_lowercase + string.digits, k=4))}xlstore"
     whatsapp = "08" + ''.join(random.choices(string.digits, k=9))
@@ -301,6 +316,7 @@ async def process_xl_esim(chat_id, status_callback):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    manual_email_pending.discard(update.effective_chat.id)
     if not await is_user_joined(context, user_id):
         keyboard = [
             [InlineKeyboardButton("📢 Join Channel", url="https://t.me/forarieyproject")],
@@ -313,16 +329,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    keyboard = [
-        [InlineKeyboardButton("🚀 Mulai Claim Esim", callback_data="start_claim")],
-        [InlineKeyboardButton("🔄 Claim Loop", callback_data="start_claim_loop")],
-        [InlineKeyboardButton("💰 Support Owner", callback_data="donation")],
-        [InlineKeyboardButton("🎦 Bot Alight Motion", url="https://t.me/amforariey_bot")],
-        [InlineKeyboardButton("🗨️ Channel Update", url="https://t.me/forarieyproject")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("👋 <b>Selamat datang di Bot Claim eSIM XL!</b>\nSilakan pilih menu di bawah:", 
-                                   reply_markup=reply_markup, parse_mode="HTML")
+                                   reply_markup=claim_menu(), parse_mode="HTML")
 
 async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -332,6 +340,70 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("⚠️ Tidak ada proses Claim Loop yang sedang berjalan.", parse_mode="HTML")
 
+async def manual_email_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    if chat_id not in manual_email_pending:
+        return
+
+    email = update.message.text.strip()
+    if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
+        await update.message.reply_text("⚠️ Format email tidak valid. Kirim email yang benar, atau ketik /start untuk membatalkan.")
+        return
+
+    manual_email_pending.remove(chat_id)
+    msg = await update.message.reply_text("🚀 Memproses Manual Esim dengan email yang kamu masukkan...")
+
+    async def update_status(text):
+        try:
+            await context.bot.edit_message_text(
+                text=text, chat_id=chat_id, message_id=msg.message_id, parse_mode="HTML"
+            )
+        except Exception:
+            pass
+
+    user = update.effective_user
+    username = f"@{user.username}" if user.username else user.first_name
+    path, info, ms, pk, sm, ac = await process_xl_esim(chat_id, update_status, email=email)
+
+    if path and "esim_" in path and os.path.exists(path):
+        keyboard_claim = [[InlineKeyboardButton("🧩 Register Biometrik", url="https://registrasi.xl.co.id")]]
+        await context.bot.send_photo(
+            chat_id=chat_id,
+            photo=open(path, "rb"),
+            caption=info,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard_claim)
+        )
+        if ms:
+            grup_text = (
+                f"👤 Halo {username}\n\n"
+                "✅ <b>Esim Berhasil Dibuat</b>\n\n"
+                "<b>Detail Esim Private Kamu</b>\n"
+                "<pre>MSISDN     : " + sensor_text(ms) + "\n"
+                "Kode PUK   : " + sensor_text(pk) + "\n"
+                "Address    : " + sm + "\n"
+                "Activation : " + sensor_text(ac) + "\n\n"
+                "CREATED    : @forariey\n"
+                "Donation   : 082151916181</pre>"
+            )
+            await context.bot.send_message(
+                chat_id=GROUP_ID, text=grup_text, parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(keyboard_claim)
+            )
+        os.remove(path)
+    elif path and os.path.exists(path):
+        await context.bot.send_photo(
+            chat_id=chat_id,
+            photo=open(path, "rb"),
+            caption=f"❌ <b>Gagal Memproses:</b>\n<pre>{info}</pre>",
+            parse_mode="HTML"
+        )
+        os.remove(path)
+    else:
+        await context.bot.send_message(
+            chat_id=chat_id, text=f"❌ <b>Gagal Memproses:</b>\n<pre>{info}</pre>", parse_mode="HTML"
+        )
+
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -339,17 +411,22 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if query.data == "check_join":
         if await is_user_joined(context, user_id):
-            keyboard = [
-                [InlineKeyboardButton("🚀 Mulai Claim Esim", callback_data="start_claim")],
-                [InlineKeyboardButton("🔄 Claim Loop", callback_data="start_claim_loop")],
-                [InlineKeyboardButton("💰 Support Owner", callback_data="donation")],
-                [InlineKeyboardButton("🎦 Bot Alight Motion", url="https://t.me/amforariey_bot")],
-                [InlineKeyboardButton("🗨️ Channel Update", url="https://t.me/forarieyproject")]
-            ]
             await query.edit_message_text("✅ <b>Terima kasih!</b> Anda telah bergabung.\nSilakan gunakan fitur bot:", 
-                                          reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+                                          reply_markup=claim_menu(), parse_mode="HTML")
         else:
             await query.answer("❌ Anda belum bergabung di channel, silakan klik tombol Join!", show_alert=True)
+
+    elif query.data == "manual_esim":
+        if not await is_user_joined(context, user_id):
+            await query.message.reply_text("⚠️ Silakan join channel @forarieyproject terlebih dahulu!")
+            return
+
+        manual_email_pending.add(query.message.chat.id)
+        await query.message.reply_text(
+            "✍️ <b>Manual Esim</b>\n\nKirim email yang ingin digunakan untuk menerima OTP.\n"
+            "Email ini akan dipakai tanpa generate email baru.\n\nKetik /start untuk membatalkan.",
+            parse_mode="HTML"
+        )
 
     elif query.data == "donation":
         await query.message.reply_text("Dana : 082151916181\nShopeepay : 082151916181")
@@ -522,6 +599,7 @@ async def startup_event():
     telegram_app = Application.builder().token(TOKEN).build()
     telegram_app.add_handler(CommandHandler("start", start))
     telegram_app.add_handler(CommandHandler("stop", stop_command))
+    telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, manual_email_handler))
     telegram_app.add_handler(CallbackQueryHandler(button_handler))
     await telegram_app.initialize()
     await telegram_app.start()
