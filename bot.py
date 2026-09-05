@@ -171,7 +171,7 @@ async def process_xl_esim(chat_id, status_callback):
                 args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
             )
             page = await browser.new_page(viewport={"width": 1366, "height": 768})
-            
+
             try:
                 logger.info("Membuka halaman XL...")
                 await status_callback("🌐 [LOG: 1/7] Membuka halaman XL eSIM Trial...")
@@ -307,69 +307,76 @@ async def process_xl_esim(chat_id, status_callback):
                 except Exception:
                     await page.click("button:has-text('Lanjut'), button:has-text('Konfirmasi')")
 
-            logger.info("Pilih nomor...")
-            await status_callback("📱 [LOG: 6/7] Menunggu dan memilih nomor eSIM...")
-            
-            try:
-                await page.wait_for_selector('input[type="radio"], label, .number-card, text=/08/', timeout=30000)
-            except Exception:
-                logger.warning("Timeout menunggu elemen pilihan nomor, mencoba lanjut paksa via evaluate...")
+                logger.info("Pilih nomor...")
+                await status_callback("📱 [LOG: 6/7] Menunggu dan memilih nomor eSIM...")
 
-            await asyncio.sleep(3) 
-            
-            await page.evaluate("""() => {
-                const radios = Array.from(document.querySelectorAll('input[type="radio"]'));
-                if (radios.length > 0) {
-                    radios[0].checked = true;
-                    radios[0].click();
-                    radios[0].dispatchEvent(new Event('change', { bubbles: true }));
-                    return;
-                }
-                const candidates = Array.from(document.querySelectorAll('div, label, span, button')).filter(el => {
-                    const text = el.innerText ? el.innerText.trim() : '';
-                    return text.startsWith('08') && text.length >= 10 && text.length <= 15 && el.children.length <= 2;
-                });
-                if (candidates.length > 0) {
-                    candidates[0].click();
-                }
-            }""")
+                try:
+                    await page.wait_for_selector('input[type="radio"], label, .number-card, text=/08/', timeout=30000)
+                except Exception:
+                    logger.warning("Timeout menunggu elemen pilihan nomor, mencoba lanjut paksa via evaluate...")
 
-            logger.info("Lanjut ke QR...")
-            await status_callback("📤 [LOG: 7/7] Menekan tombol Lanjut...")
-            await asyncio.sleep(2)
+                await asyncio.sleep(3)
 
-            await page.evaluate("""() => {
-                const btns = Array.from(document.querySelectorAll('button, div[role="button"]'));
-                const target = btns.find(b => b.innerText && (b.innerText.toLowerCase().includes('lanjut') || b.innerText.toLowerCase().includes('konfirmasi') || b.innerText.toLowerCase().includes('pilih')));
-                if (target) {
-                    target.click();
-                }
-            }""")
+                await page.evaluate("""() => {
+                    const radios = Array.from(document.querySelectorAll('input[type="radio"]'));
+                    if (radios.length > 0) {
+                        radios[0].checked = true;
+                        radios[0].click();
+                        radios[0].dispatchEvent(new Event('change', { bubbles: true }));
+                        return;
+                    }
+                    const candidates = Array.from(document.querySelectorAll('div, label, span, button')).filter(el => {
+                        const text = el.innerText ? el.innerText.trim() : '';
+                        return text.startsWith('08') && text.length >= 10 && text.length <= 15 && el.children.length <= 2;
+                    });
+                    if (candidates.length > 0) {
+                        candidates[0].click();
+                    }
+                }""")
 
-            logger.info("Proses akhir QR...")
-            await status_callback("⏳ Sedang memproses eSIM di server XL (Menunggu QR & Email)...")
-            await asyncio.sleep(10) 
-            
-            await status_callback("✨ QR Code berhasil dimuat! Mengambil screenshot & membaca detail email...")
-            await page.screenshot(path=screenshot_path, full_page=True)
-            await browser.close()
-            
-            if os.path.exists(debug_path):
-                os.remove(debug_path)
+                logger.info("Lanjut ke QR...")
+                await status_callback("📤 [LOG: 7/7] Menekan tombol Lanjut...")
+                await asyncio.sleep(2)
 
-            info, ms, pk, sm, ac = await temp.fetch_xl_confirmation_email(timeout=60)
-            retry_text = max(email_retry_count - 1, 0)
-            await status_callback(f"✅ [SUKSES] Proses berhasil setelah {retry_text} kali regenerasi email baru.")
-            return screenshot_path, info, ms, pk, sm, ac
+                await page.evaluate("""() => {
+                    const btns = Array.from(document.querySelectorAll('button, div[role="button"]'));
+                    const target = btns.find(b => b.innerText && (b.innerText.toLowerCase().includes('lanjut') || b.innerText.toLowerCase().includes('konfirmasi') || b.innerText.toLowerCase().includes('pilih')));
+                    if (target) {
+                        target.click();
+                    }
+                }""")
 
-        except Exception as e:
-            logger.error(f"Error di proses utama: {e}")
-            try:
-                await page.screenshot(path=debug_path)
-                await browser.close()
-            except Exception:
-                pass
-            return debug_path, str(e), None, None, None, None
+                logger.info("Proses akhir QR...")
+                await status_callback("⏳ Sedang memproses eSIM di server XL (Menunggu QR & Email)...")
+                await asyncio.sleep(10)
+
+                await status_callback("✨ QR Code berhasil dimuat! Mengambil screenshot & membaca detail email...")
+                await page.screenshot(path=screenshot_path, full_page=True)
+
+                if os.path.exists(debug_path):
+                    os.remove(debug_path)
+
+                info, ms, pk, sm, ac = await temp.fetch_xl_confirmation_email(timeout=60)
+                retry_text = max(email_retry_count - 1, 0)
+                await status_callback(f"✅ [SUKSES] Proses berhasil setelah {retry_text} kali regenerasi email baru.")
+                return screenshot_path, info, ms, pk, sm, ac
+
+            except Exception as e:
+                logger.error(f"Error di proses utama: {e}")
+                try:
+                    await page.screenshot(path=debug_path)
+                except Exception:
+                    pass
+                return debug_path, str(e), None, None, None, None
+
+            finally:
+                try:
+                    await browser.close()
+                except Exception:
+                    pass
+
+        # end while
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
