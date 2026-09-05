@@ -326,27 +326,34 @@ async def process_xl_esim(chat_id, status_callback):
                 form_retry += 1
                 logger.info("Proses form XL, percobaan ke-%s", form_retry)
                 await page.goto("https://www.xl.co.id/esim-trial/claim", timeout=90000, wait_until="domcontentloaded")
+                await asyncio.sleep(1.5)
 
                 try:
                     await page.locator("button:has-text('Setuju'), button:has-text('Agree'), button:has-text('I agree')").first.click(timeout=8000)
+                    await asyncio.sleep(1.0)
                 except Exception:
                     pass
 
                 try:
                     await page.get_by_text("Mulai Isi Data", exact=True).click(timeout=15000)
+                    await asyncio.sleep(1.2)
                 except Exception:
                     pass
 
                 logger.info("Mengisi 3 form: Nama Lengkap, Email, Nomor WhatsApp")
                 await status_callback("📝 Mengisi Nama Lengkap, Email, dan Nomor WhatsApp...")
                 await page.get_by_label("Nama Lengkap").fill(full_name)
+                await asyncio.sleep(0.4)
                 await page.get_by_label("Email").fill(temp.email)
+                await asyncio.sleep(0.4)
                 await page.get_by_label("Nomor WhatsApp").fill(whatsapp)
+                await asyncio.sleep(0.6)
 
                 logger.info("Centang syarat dan ketentuan")
                 await status_callback("✅ Mencentang syarat & ketentuan...")
                 try:
                     await page.locator("input[type='checkbox']").last.check(timeout=10000)
+                    await asyncio.sleep(0.7)
                 except Exception:
                     await page.evaluate("""() => {
                         const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
@@ -359,10 +366,12 @@ async def process_xl_esim(chat_id, status_callback):
                             target.dispatchEvent(new Event('change', { bubbles: true }));
                         }
                     }""")
+                    await asyncio.sleep(0.7)
 
                 logger.info("Tekan lanjut")
                 await status_callback("➡️ Menekan tombol Lanjut...")
                 next_btn = page.locator("button:has-text('Lanjut'), button:has-text('Kirim'), button:has-text('Lanjutkan')").first
+                await asyncio.sleep(0.8)
                 await next_btn.click(timeout=20000)
 
                 popup_detected = False
@@ -405,9 +414,11 @@ async def process_xl_esim(chat_id, status_callback):
                     await temp.create_account(status_callback=status_callback)
                     logger.info("Email baru setelah popup: %s", temp.email)
                     await page.get_by_label("Email").fill(temp.email)
+                    await asyncio.sleep(0.6)
 
                     try:
                         await page.locator("input[type='checkbox']").last.check(timeout=10000)
+                        await asyncio.sleep(0.7)
                     except Exception:
                         await page.evaluate("""() => {
                             const list = Array.from(document.querySelectorAll('input[type="checkbox"]'));
@@ -420,7 +431,9 @@ async def process_xl_esim(chat_id, status_callback):
                                 target.dispatchEvent(new Event('change', { bubbles: true }));
                             }
                         }""")
+                        await asyncio.sleep(0.7)
 
+                    await asyncio.sleep(0.8)
                     await next_btn.click(timeout=20000)
                     continue
 
