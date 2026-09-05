@@ -443,6 +443,7 @@ async def process_xl_esim(chat_id, status_callback):
                 checkbox = page.get_by_role("checkbox")
                 await checkbox.wait_for(state="visible", timeout=10000)
                 await checkbox.check(timeout=10000)
+                await page.wait_for_function("() => { const cb = document.querySelector('input[type=\"checkbox\"]'); return cb && cb.checked; }", timeout=10000)
             except Exception:
                 try:
                     inputs = await page.locator("input").all()
@@ -454,12 +455,13 @@ async def process_xl_esim(chat_id, status_callback):
                         raise Exception("Gagal mendeteksi input form")
                     checkbox = page.get_by_role("checkbox")
                     await checkbox.check(timeout=10000)
+                    await page.wait_for_function("() => { const cb = document.querySelector('input[type=\"checkbox\"]'); return cb && cb.checked; }", timeout=10000)
                 except Exception:
                     await page.evaluate("""() => {
                         const inputs = Array.from(document.querySelectorAll('input'));
-                        const fullName = inputs.find(el => el.getAttribute('placeholder') === ' ' && (el.labels && Array.from(el.labels).some(l => l.innerText.includes('Nama Lengkap'))));
-                        const email = inputs.find(el => el.getAttribute('placeholder') === ' ' && (el.labels && Array.from(el.labels).some(l => l.innerText.includes('Email'))));
-                        const wa = inputs.find(el => el.getAttribute('placeholder') === ' ' && (el.labels && Array.from(el.labels).some(l => l.innerText.includes('Nomor WhatsApp'))));
+                        const fullName = inputs.find(el => el.labels && Array.from(el.labels).some(l => l.innerText.includes('Nama Lengkap')));
+                        const email = inputs.find(el => el.labels && Array.from(el.labels).some(l => l.innerText.includes('Email')));
+                        const wa = inputs.find(el => el.labels && Array.from(el.labels).some(l => l.innerText.includes('Nomor WhatsApp')));
                         if (fullName) fullName.value = arguments[0];
                         if (email) email.value = arguments[1];
                         if (wa) wa.value = arguments[2];
@@ -470,12 +472,14 @@ async def process_xl_esim(chat_id, status_callback):
                         }
                     }""", full_name, temp.email, whatsapp)
 
-            except Exception as e:
-                logger.error(f"Error isi data: {e}")
-                raise Exception("Error: Form input tidak ditemukan.")
-
             logger.info("Kirim OTP...")
             await status_callback("📤 [LOG: 4/7] Mengirim permintaan OTP...")
+
+            try:
+                await page.wait_for_function("() => { const btn = Array.from(document.querySelectorAll('button, [role=\"button\"]')).find(el => (el.innerText || '').trim().toLowerCase().includes('lanjut')); return !!btn && !btn.disabled; }", timeout=15000)
+            except Exception:
+                pass
+
             try:
                 await page.locator("button:has-text('Lanjut'), button:has-text('Kirim'), button:has-text('Lanjutkan')").first.click(timeout=20000)
             except Exception:
@@ -485,8 +489,14 @@ async def process_xl_esim(chat_id, status_callback):
                             const text = (el.innerText || '').trim();
                             return text.toLowerCase().includes('lanjut') || text.toLowerCase().includes('kirim') || text.toLowerCase().includes('lanjutkan');
                         });
-                    if (btn) btn.click();
+                    if (btn) {
+                        btn.click();
+                        btn.dispatchEvent(new Event('click', { bubbles: true }));
+                    }
                 }""")
+
+            await asyncio.sleep(2)
+            await page.screenshot(path=debug_path)
 
             logger.info("Menunggu OTP...")
             await status_callback(f"⏳ [LOG: 5/7] Menunggu OTP masuk ke `{temp.email}`...")
