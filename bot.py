@@ -170,7 +170,7 @@ async def process_xl_esim(chat_id, status_callback):
                 headless=True,
                 args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
             )
-            context = await browser.new_context(viewport={"width": 1366, "height": 768}, locale="id-ID")
+            context = await browser.new_context(viewport={"width": 1366, "height": 768})
             page = await context.new_page()
 
             try:
@@ -240,10 +240,10 @@ async def process_xl_esim(chat_id, status_callback):
                 await status_callback("📤 [LOG: 6/7] Menekan tombol lanjut...")
                 try:
                     await page.get_by_role("button", name="Lanjut").click(timeout=10000)
-                    await asyncio.sleep(1.5)
+                    await asyncio.sleep(1.0)
                 except Exception:
                     await page.click("button:has-text('Lanjut'), button:has-text('Kirim')", timeout=10000)
-                    await asyncio.sleep(1.5)
+                    await asyncio.sleep(0.5)
 
                 logger.info("Ambil screenshot setelah klik lanjut")
                 await status_callback("📸 [LOG: 7/7] Mengambil screenshot setelah tombol lanjut...")
