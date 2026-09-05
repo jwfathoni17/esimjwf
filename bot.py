@@ -19,7 +19,7 @@ TOKEN = "8877836310:AAHeAf-cAx2ho6MttbnHdA302fTl8b4UzBU"
 GROUP_ID = -1003928341140
 CHANNEL_USERNAME = "@esimjwf" 
 ADMIN_ID = 1294583646
-RUN2MAIL_API_KEY = r2m_jbh6mqogpq5ufzxsn5a4lbqzc1xwv
+
 
 app = FastAPI()
 telegram_app = None
