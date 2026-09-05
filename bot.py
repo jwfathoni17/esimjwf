@@ -178,35 +178,41 @@ async def process_xl_esim(chat_id, status_callback):
                 await page.goto("https://www.xl.co.id/esim-trial/claim", timeout=90000, wait_until="domcontentloaded")
                 await asyncio.sleep(1.5)
 
-                logger.info("Klik Setuju cookie...")
-                await status_callback("🍪 [LOG: 2/7] Menyetujui cookie policy...")
+                logger.info("Mengecek cookie banner...")
+                await status_callback("🍪 [LOG: 2/7] Mengecek cookie banner...")
                 try:
-                    await page.locator("button:has-text('Setuju'), button:has-text('Agree'), button:has-text('I agree'), button:has-text('Accept')").first.click(timeout=10000)
-                    await asyncio.sleep(1.0)
+                    accept_btn = page.locator("button:has-text('Setuju'), button:has-text('Agree'), button:has-text('I agree'), button:has-text('Accept')").first
+                    if await accept_btn.is_visible(timeout=5000):
+                        await accept_btn.click(timeout=15000)
+                        await asyncio.sleep(1.5)
                 except Exception:
                     pass
 
-                logger.info("Klik mulai...")
-                await status_callback("🖱️ [LOG: 3/7] Klik tombol mulai...")
+                logger.info("Klik mulai isi data...")
+                await status_callback("🖱️ [LOG: 3/7] Klik tombol mulai isi data...")
                 try:
-                    await page.wait_for_selector("text=Mulai Isi Data", timeout=20000)
-                    await page.get_by_text("Mulai Isi Data").first.click()
-                    await asyncio.sleep(1.2)
+                    start_btn = page.get_by_text("Mulai Isi Data", exact=True).first
+                    if await start_btn.is_visible(timeout=10000):
+                        await start_btn.click(timeout=15000)
+                        await asyncio.sleep(1.5)
                 except Exception:
-                    await page.click("button:has-text('Mulai Isi Data')", timeout=5000)
-                    await asyncio.sleep(1.2)
+                    try:
+                        await page.click("button:has-text('Mulai Isi Data')", timeout=15000)
+                        await asyncio.sleep(1.5)
+                    except Exception:
+                        pass
 
-                logger.info("Isi data...")
-                await status_callback("📝 [LOG: 4/7] Mengisi data diri otomatis...")
+                logger.info("Isi form nama, email, nomor telepon...")
+                await status_callback("📝 [LOG: 4/7] Mengisi form nama, email, dan nomor telepon...")
                 try:
                     inputs = await page.locator("input").all()
                     if len(inputs) >= 3:
                         await inputs[0].fill(full_name)
-                        await asyncio.sleep(0.3)
+                        await asyncio.sleep(0.4)
                         await inputs[1].fill(temp.email)
-                        await asyncio.sleep(0.3)
+                        await asyncio.sleep(0.4)
                         await inputs[2].fill(whatsapp)
-                        await asyncio.sleep(0.5)
+                        await asyncio.sleep(0.6)
                     else:
                         raise Exception("Gagal mendeteksi input form")
                 except Exception as e:
@@ -217,119 +223,32 @@ async def process_xl_esim(chat_id, status_callback):
                 await status_callback("✅ [LOG: 5/7] Mencentang syarat & ketentuan...")
                 try:
                     checkbox = page.locator("input[type='checkbox']").last
-                    await checkbox.check(timeout=10000)
-                    await asyncio.sleep(0.6)
+                    await checkbox.check(timeout=15000)
+                    await asyncio.sleep(0.8)
                 except Exception:
                     try:
-                        await page.locator("label:has-text('Syarat'), label:has-text('Ketentuan')").first.click(timeout=10000)
-                        await asyncio.sleep(0.6)
+                        await page.locator("label:has-text('Syarat'), label:has-text('Ketentuan')").first.click(timeout=15000)
+                        await asyncio.sleep(0.8)
                     except Exception:
                         pass
 
-                logger.info("Kirim OTP...")
-                await status_callback("📤 [LOG: 6/7] Mengirim permintaan OTP...")
+                logger.info("Tekan lanjut...")
+                await status_callback("📤 [LOG: 6/7] Menekan tombol lanjut...")
                 try:
-                    await page.get_by_role("button", name="Lanjut").click(timeout=15000)
-                    await asyncio.sleep(1.2)
-                except Exception:
-                    await page.click("button:has-text('Lanjut'), button:has-text('Kirim')")
-                    await asyncio.sleep(1.2)
-
-                popup_email_used = page.get_by_text(re.compile(r"Email ini sudah pernah digunakan.*free trial eSIM|sudah pernah digunakan.*free trial eSIM", re.IGNORECASE))
-                popup_security_failed = page.get_by_text(re.compile(r"Verifikasi keamanan gagal|keamanan gagal.*coba lagi", re.IGNORECASE))
-
-                if await popup_email_used.first.is_visible(timeout=4000):
-                    if chat_id in stop_email_flags:
-                        logger.info(f"User memutuskan berhenti saat popup email duplikat di chat {chat_id}")
-                        await status_callback("🛑 [STOP EMAIL] Proses dihentikan sebelum retry berikutnya.")
-                        await browser.close()
-                        return None, "Proses dibatalkan oleh user via /stopemail.", None, None, None, None
-
-                    email_retry_count += 1
-                    logger.warning(f"Popup email sudah pernah digunakan terdeteksi. Retry email ke-{email_retry_count}")
-                    await status_callback(
-                        f"⚠️ [RETRY EMAIL {email_retry_count}] Teks popup: 'Email ini sudah pernah digunakan untuk mendaftar free trial eSIM.' Membuat email baru dan mengganti email saja..."
-                    )
-
-                    try:
-                        await page.keyboard.press("Escape")
-                    except Exception:
-                        pass
-
-                    try:
-                        await page.locator("button[aria-label='Close'], [aria-label='Close'], button:has-text('X'), button:has-text('✕'), text='×'").first.click(timeout=3000)
-                    except Exception:
-                        pass
-
-                    try:
-                        temp = MailTMBot()
-                        await temp.create_account()
-                        email_field = page.locator("input[type='email'], input[name*='email' i], input[placeholder*='Email' i]").first
-                        await email_field.clear(timeout=5000)
-                        await email_field.fill(temp.email)
-                        await asyncio.sleep(0.6)
-                        checkbox = page.locator("input[type='checkbox']").last
-                        await checkbox.check(timeout=10000)
-                        await asyncio.sleep(0.6)
-                        await page.get_by_role("button", name="Lanjut").click(timeout=15000)
-                        await asyncio.sleep(1.2)
-                        logger.info(f"Email baru dipasang: {temp.email}")
-                        continue
-                    except Exception as e:
-                        logger.error(f"Gagal mengganti email & retry: {e}")
-                        await page.reload(wait_until="domcontentloaded")
-                        await asyncio.sleep(1.5)
-                        continue
-
-                if await popup_security_failed.first.is_visible(timeout=4000):
-                    logger.warning("Popup 'Verifikasi keamanan gagal. Silakan coba lagi.' terdeteksi. Reload dan ulang dari form.")
-                    await status_callback("⚠️ [RETRY SECURITY] Teks popup: 'Verifikasi keamanan gagal. Silakan coba lagi.' Reload halaman dan ulang proses dengan delay pendek...")
-
-                    try:
-                        await page.locator("button[aria-label='Tutup'], [aria-label='Close'], button:has-text('X'), button:has-text('✕'), text='×'").first.click(timeout=3000)
-                    except Exception:
-                        pass
-
-                    await page.reload(wait_until="domcontentloaded")
+                    await page.get_by_role("button", name="Lanjut").click(timeout=20000)
                     await asyncio.sleep(2.0)
-                    continue
-
-                logger.info("Menunggu OTP...")
-                await status_callback(f"⏳ [LOG: 7/7] Menunggu OTP masuk ke `{temp.email}`...")
-                otp = await temp.fetch_otp(timeout=60)
-
-                if not otp:
-                    await page.screenshot(path=debug_path)
-                    raise Exception("Error: Waktu tunggu OTP habis (Timeout).")
-
-                logger.info(f"Input OTP: {otp}")
-                await status_callback(f"✅ [LOG: OTP OK] Kode: `{otp}`. Memasukkan ke sistem...")
-
-                try:
-                    await page.locator("input").first.click()
-                    await asyncio.sleep(0.5)
                 except Exception:
-                    pass
+                    await page.click("button:has-text('Lanjut'), button:has-text('Kirim')", timeout=20000)
+                    await asyncio.sleep(2.0)
 
-                await page.keyboard.type(otp, delay=150)
-                await asyncio.sleep(0.8)
-
-                logger.info("Konfirmasi OTP...")
-                await status_callback("📤 [LOG: Konfirmasi OTP] Menekan tombol Lanjut...")
-                await asyncio.sleep(1.5)
-                try:
-                    await page.get_by_role("button", name="Lanjut").click(timeout=10000)
-                except Exception:
-                    await page.click("button:has-text('Lanjut'), button:has-text('Konfirmasi')")
-
-                logger.info("Stop di tahap setelah klik lanjut untuk screenshot debugging")
-                await status_callback("📸 [DEBUG] Setelah klik Lanjut, saya berhenti di tahap ini untuk mengambil screenshot dan memeriksa tampilan halaman selanjutnya.")
+                logger.info("Ambil screenshot setelah klik lanjut")
+                await status_callback("📸 [LOG: 7/7] Mengambil screenshot setelah tombol lanjut...")
                 await page.screenshot(path=screenshot_path, full_page=True)
 
                 if os.path.exists(debug_path):
                     os.remove(debug_path)
 
-                return screenshot_path, "Proses dihentikan setelah klik Lanjut untuk verifikasi tampilan halaman.", None, None, None, None
+                return screenshot_path, "Selesai sampai tahap setelah klik lanjut dan screenshot berhasil diambil.", None, None, None, None
 
             except Exception as e:
                 logger.error(f"Error di proses utama: {e}")
@@ -363,11 +282,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     keyboard = [
-        [InlineKeyboardButton("🚀 Mulai Claim Esim", callback_data="start_claim")],
-        [InlineKeyboardButton("🔄 Claim Loop", callback_data="start_claim_loop")],
-        [InlineKeyboardButton("💰 Support Owner", callback_data="donation")],
-        [InlineKeyboardButton("🎦 Bot Alight Motion", url="https://t.me/amforariey_bot")],
-        [InlineKeyboardButton("🗨️ Channel Update", url="https://t.me/forarieyproject")]
+        [InlineKeyboardButton("🚀 Mulai Claim Esim", callback_data="start_claim")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("👋 <b>Selamat datang di Bot Claim eSIM XL!</b>\nSilakan pilih menu di bawah:", 
@@ -397,11 +312,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data == "check_join":
         if await is_user_joined(context, user_id):
             keyboard = [
-                [InlineKeyboardButton("🚀 Mulai Claim Esim", callback_data="start_claim")],
-                [InlineKeyboardButton("🔄 Claim Loop", callback_data="start_claim_loop")],
-                [InlineKeyboardButton("💰 Support Owner", callback_data="donation")],
-                [InlineKeyboardButton("🎦 Bot Alight Motion", url="https://t.me/amforariey_bot")],
-                [InlineKeyboardButton("🗨️ Channel Update", url="https://t.me/forarieyproject")]
+                [InlineKeyboardButton("🚀 Mulai Claim Esim", callback_data="start_claim")]
             ]
             await query.edit_message_text("✅ <b>Terima kasih!</b> Anda telah bergabung.\nSilakan gunakan fitur bot:", 
                                           reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
