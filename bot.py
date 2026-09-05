@@ -194,7 +194,7 @@ class Run2MailBot:
             url = self._candidate_urls("create")[0]
             try:
                 logger.info("Generate email via temp.tf: %s", url)
-                params = {"dot": 1, "plus": 1, "providers": "gmail"}
+                params = {"dot": 1, "providers": "gmail"}
                 async with aiohttp.ClientSession() as session:
                     async with session.get(url, params=params, timeout=30) as r:
                         data = await r.json(content_type=None)
