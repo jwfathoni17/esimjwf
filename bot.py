@@ -23,6 +23,7 @@ telegram_app = None
 
 # Variabel global untuk melacak status loop aktif per chat/user
 active_loops = set()
+stop_email_flags = set()
 
 def sensor_text(text):
     if not text or len(text) <= 3: return "***"
@@ -149,8 +150,14 @@ async def process_xl_esim(chat_id, status_callback):
     full_name = f"mhmdsari{''.join(random.choices(string.ascii_lowercase + string.digits, k=4))}xlstore"
     whatsapp = "08" + ''.join(random.choices(string.digits, k=9))
     email_retry_count = 0
+    stop_email_flags.discard(chat_id)
 
     while True:
+        if chat_id in stop_email_flags:
+            logger.info(f"Proses email dibatalkan oleh user di chat {chat_id}")
+            await status_callback("🛑 [STOP EMAIL] Proses dibatalkan oleh user.")
+            return None, "Proses dibatalkan oleh user via /stopemail.", None, None, None, None
+
         email_retry_count += 1
         temp = MailTMBot()
         await temp.create_account()
@@ -230,6 +237,12 @@ async def process_xl_esim(chat_id, status_callback):
 
                 popup = page.get_by_text(re.compile(r"Email ini sudah pernah digunakan.*free trial eSIM|sudah pernah digunakan.*free trial eSIM", re.IGNORECASE))
                 if await popup.first.is_visible(timeout=4000):
+                    if chat_id in stop_email_flags:
+                        logger.info(f"User memutuskan berhenti saat popup email duplikat di chat {chat_id}")
+                        await status_callback("🛑 [STOP EMAIL] Proses dihentikan sebelum retry berikutnya.")
+                        await browser.close()
+                        return None, "Proses dibatalkan oleh user via /stopemail.", None, None, None, None
+
                     email_retry_count += 1
                     logger.warning(f"Popup email sudah pernah digunakan terdeteksi. Retry email ke-{email_retry_count}")
                     await status_callback(
@@ -390,6 +403,14 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🛑 <b>Claim Loop berhasil dihentikan!</b>", parse_mode="HTML")
     else:
         await update.message.reply_text("⚠️ Tidak ada proses Claim Loop yang sedang berjalan.", parse_mode="HTML")
+
+async def stop_email_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    stop_email_flags.add(chat_id)
+    if chat_id in active_loops:
+        await update.message.reply_text("🛑 <b>Proses retry email dihentikan.</b> Bot akan berhenti setelah langkah saat ini selesai.", parse_mode="HTML")
+    else:
+        await update.message.reply_text("🛑 <b>Stop email aktif.</b> Proses retry email akan dibatalkan pada percobaan berikutnya.", parse_mode="HTML")
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -578,6 +599,7 @@ async def startup_event():
     telegram_app = Application.builder().token(TOKEN).build()
     telegram_app.add_handler(CommandHandler("start", start))
     telegram_app.add_handler(CommandHandler("stop", stop_command))
+    telegram_app.add_handler(CommandHandler("stopemail", stop_email_command))
     telegram_app.add_handler(CallbackQueryHandler(button_handler))
     await telegram_app.initialize()
     await telegram_app.start()
