@@ -408,12 +408,20 @@ async def process_xl_esim(chat_id, status_callback):
             headless=True,
             args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
         )
-        page = await browser.new_page(viewport={"width": 1366, "height": 768})
+        page = await browser.new_page(
+            viewport={"width": 1440, "height": 1200},
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+        )
         
         try:
             logger.info("Membuka halaman XL...")
             await status_callback("🌐 [LOG: 1/7] Membuka halaman XL eSIM Trial...")
             await page.goto("https://www.xl.co.id/esim-trial/claim", timeout=90000, wait_until="domcontentloaded")
+
+            try:
+                await page.locator("button:has-text('Setuju'), button:has-text('Agree'), button:has-text('I agree')").first.click(timeout=8000)
+            except Exception:
+                pass
 
             logger.info("Klik mulai...")
             await status_callback("🖱️ [LOG: 2/7] Klik tombol mulai...")
@@ -428,35 +436,39 @@ async def process_xl_esim(chat_id, status_callback):
             logger.info("Isi data...")
             await status_callback("📝 [LOG: 3/7] Mengisi data diri otomatis...")
             try:
-                inputs = await page.locator("input").all()
-                if len(inputs) >= 3:
-                    await inputs[0].fill(full_name)
-                    await inputs[1].fill(temp.email)
-                    await inputs[2].fill(whatsapp)
-                else:
-                    raise Exception("Gagal mendeteksi input form")
+                await page.get_by_label("Nama Lengkap").fill(full_name)
+                await page.get_by_label("Email").fill(temp.email)
+                await page.get_by_label("Nomor WhatsApp").fill(whatsapp)
 
+                checkbox = page.get_by_role("checkbox")
+                await checkbox.wait_for(state="visible", timeout=10000)
+                await checkbox.check(timeout=10000)
+            except Exception:
                 try:
-                    await page.locator("input[type='checkbox']").first.check(timeout=10000)
+                    inputs = await page.locator("input").all()
+                    if len(inputs) >= 3:
+                        await inputs[0].fill(full_name)
+                        await inputs[1].fill(temp.email)
+                        await inputs[2].fill(whatsapp)
+                    else:
+                        raise Exception("Gagal mendeteksi input form")
+                    checkbox = page.get_by_role("checkbox")
+                    await checkbox.check(timeout=10000)
                 except Exception:
-                    try:
-                        await page.get_by_role("checkbox").first.check(timeout=10000)
-                    except Exception:
-                        await page.evaluate("""() => {
-                            const cb = Array.from(document.querySelectorAll('input[type="checkbox"], input[type="radio"], label'))
-                                .find(el => {
-                                    const text = (el.labels && el.labels.length ? Array.from(el.labels).map(l => l.innerText).join(' ') : el.innerText || '').toLowerCase();
-                                    return text.includes('term') || text.includes('syarat') || text.includes('condition') || text.includes('agreement');
-                                });
-                            if (cb) {
-                                if (cb.type === 'checkbox' || cb.type === 'radio') {
-                                    cb.checked = true;
-                                    cb.click();
-                                } else if (cb.tagName === 'LABEL') {
-                                    cb.click();
-                                }
-                            }
-                        }""")
+                    await page.evaluate("""() => {
+                        const inputs = Array.from(document.querySelectorAll('input'));
+                        const fullName = inputs.find(el => el.getAttribute('placeholder') === ' ' && (el.labels && Array.from(el.labels).some(l => l.innerText.includes('Nama Lengkap'))));
+                        const email = inputs.find(el => el.getAttribute('placeholder') === ' ' && (el.labels && Array.from(el.labels).some(l => l.innerText.includes('Email'))));
+                        const wa = inputs.find(el => el.getAttribute('placeholder') === ' ' && (el.labels && Array.from(el.labels).some(l => l.innerText.includes('Nomor WhatsApp'))));
+                        if (fullName) fullName.value = arguments[0];
+                        if (email) email.value = arguments[1];
+                        if (wa) wa.value = arguments[2];
+                        const checkbox = Array.from(document.querySelectorAll('input[type="checkbox"]'))[0];
+                        if (checkbox) {
+                            checkbox.checked = true;
+                            checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+                        }
+                    }""", full_name, temp.email, whatsapp)
 
             except Exception as e:
                 logger.error(f"Error isi data: {e}")
@@ -465,9 +477,16 @@ async def process_xl_esim(chat_id, status_callback):
             logger.info("Kirim OTP...")
             await status_callback("📤 [LOG: 4/7] Mengirim permintaan OTP...")
             try:
-                await page.get_by_role("button", name="Lanjut").click(timeout=15000)
+                await page.locator("button:has-text('Lanjut'), button:has-text('Kirim'), button:has-text('Lanjutkan')").first.click(timeout=20000)
             except Exception:
-                await page.click("button:has-text('Lanjut'), button:has-text('Kirim')")
+                await page.evaluate("""() => {
+                    const btn = Array.from(document.querySelectorAll('button, [role="button"], a'))
+                        .find(el => {
+                            const text = (el.innerText || '').trim();
+                            return text.toLowerCase().includes('lanjut') || text.toLowerCase().includes('kirim') || text.toLowerCase().includes('lanjutkan');
+                        });
+                    if (btn) btn.click();
+                }""")
 
             logger.info("Menunggu OTP...")
             await status_callback(f"⏳ [LOG: 5/7] Menunggu OTP masuk ke `{temp.email}`...")
@@ -491,9 +510,16 @@ async def process_xl_esim(chat_id, status_callback):
             await status_callback("📤 [LOG: Konfirmasi OTP] Menekan tombol Lanjut...")
             await asyncio.sleep(1.5)
             try:
-                await page.get_by_role("button", name="Lanjut").click(timeout=10000)
+                await page.locator("button:has-text('Lanjut'), button:has-text('Konfirmasi'), button:has-text('Lanjutkan')").first.click(timeout=20000)
             except Exception:
-                await page.click("button:has-text('Lanjut'), button:has-text('Konfirmasi')")
+                await page.evaluate("""() => {
+                    const btn = Array.from(document.querySelectorAll('button, [role="button"], a'))
+                        .find(el => {
+                            const text = (el.innerText || '').trim();
+                            return text.toLowerCase().includes('lanjut') || text.toLowerCase().includes('konfirmasi') || text.toLowerCase().includes('lanjutkan');
+                        });
+                    if (btn) btn.click();
+                }""")
 
             logger.info("Pilih nomor...")
             await status_callback("📱 [LOG: 6/7] Menunggu dan memilih nomor eSIM...")
