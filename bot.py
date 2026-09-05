@@ -23,16 +23,12 @@ ADMIN_ID = 1294583646
 TEMP_TF_BASE_URL = (
     os.getenv("TEMP_TF_BASE_URL")
     or os.getenv("EMAIL_PROVIDER_BASE_URL")
-    or os.getenv("RUN2MAIL_BASE_URL")
-    or os.getenv("TEMPMAIL_BASE_URL")
     or "https://temp.tf"
 ).strip().rstrip("/")
 
-RAPIDAPI_HOST = TEMP_TF_BASE_URL.replace("https://", "").replace("http://", "")
-RAPIDAPI_KEY = (os.getenv("RAPIDAPI_KEY") or os.getenv("APIKEY_MASTER") or "").strip()
 EMAIL_PROVIDER_BASE_URL = TEMP_TF_BASE_URL
-EMAIL_ACCOUNT = os.getenv("EMAIL_ACCOUNT") or os.getenv("RUN2MAIL_EMAIL") or ""
-EMAIL_INBOX_ID = os.getenv("EMAIL_INBOX_ID") or os.getenv("RUN2MAIL_INBOX_ID") or ""
+EMAIL_ACCOUNT = os.getenv("EMAIL_ACCOUNT") or ""
+EMAIL_INBOX_ID = os.getenv("EMAIL_INBOX_ID") or ""
 
 app = FastAPI()
 telegram_app = None
@@ -54,17 +50,9 @@ async def is_user_joined(context, user_id):
 class Run2MailBot:
     def __init__(self):
         self.base_url = EMAIL_PROVIDER_BASE_URL.rstrip("/")
-        self.api_key = RAPIDAPI_KEY
         self.email = EMAIL_ACCOUNT
         self.inbox_id = EMAIL_INBOX_ID
-        self.token = os.getenv("TEMP_GMAIL_TOKEN", "")
-        self.auth_mode = "rapidapi"
-        self.headers = {"Accept": "application/json"}
-
-        if self.api_key:
-            self.headers["x-rapidapi-key"] = self.api_key
-            self.headers["x-rapidapi-host"] = RAPIDAPI_HOST
-            self.headers["Content-Type"] = "application/json"
+        self.headers = {"Accept": "application/json", "Content-Type": "application/json"}
 
     def _extract_email_from_payload(self, payload):
         if not isinstance(payload, dict):
@@ -168,13 +156,6 @@ class Run2MailBot:
 
     async def _request(self, method, url, json=None, params=None):
         headers = dict(self.headers)
-        if json is not None:
-            headers["Content-Type"] = "application/json"
-
-        if self.auth_mode == "rapidapi":
-            headers.setdefault("x-rapidapi-key", self.api_key)
-            headers.setdefault("x-rapidapi-host", self.base_url.replace("https://", "").replace("http://", "").rstrip("/"))
-
         async with aiohttp.ClientSession(headers=headers) as session:
             async with session.request(method, url, json=json, params=params) as r:
                 text = await r.text()
@@ -340,89 +321,110 @@ async def process_xl_esim(chat_id, status_callback):
         try:
             logger.info("Membuka halaman XL claim...")
             await status_callback("🌐 Membuka halaman XL eSIM Trial...")
-            await page.goto("https://www.xl.co.id/esim-trial/claim", timeout=90000, wait_until="domcontentloaded")
+            form_retry = 0
+            while True:
+                form_retry += 1
+                logger.info("Proses form XL, percobaan ke-%s", form_retry)
+                await page.goto("https://www.xl.co.id/esim-trial/claim", timeout=90000, wait_until="domcontentloaded")
 
-            try:
-                await page.locator("button:has-text('Setuju'), button:has-text('Agree'), button:has-text('I agree')").first.click(timeout=8000)
-            except Exception:
-                pass
-
-            try:
-                await page.get_by_text("Mulai Isi Data", exact=True).click(timeout=15000)
-            except Exception:
-                pass
-
-            logger.info("Mengisi 3 form: Nama Lengkap, Email, Nomor WhatsApp")
-            await status_callback("📝 Mengisi Nama Lengkap, Email, dan Nomor WhatsApp...")
-            await page.get_by_label("Nama Lengkap").fill(full_name)
-            await page.get_by_label("Email").fill(temp.email)
-            await page.get_by_label("Nomor WhatsApp").fill(whatsapp)
-
-            logger.info("Centang syarat dan ketentuan")
-            await status_callback("✅ Mencentang syarat & ketentuan...")
-            try:
-                await page.locator("input[type='checkbox']").last.check(timeout=10000)
-            except Exception:
-                await page.evaluate("""() => {
-                    const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
-                    const target = checkboxes.find(cb => {
-                        const text = (cb.closest('label')?.innerText || cb.parentElement?.innerText || '').toLowerCase();
-                        return text.includes('syarat') || text.includes('ketentuan');
-                    }) || checkboxes[0];
-                    if (target) {
-                        target.checked = true;
-                        target.dispatchEvent(new Event('change', { bubbles: true }));
-                    }
-                }""")
-
-            logger.info("Tekan lanjut")
-            await status_callback("➡️ Menekan tombol Lanjut...")
-            next_btn = page.locator("button:has-text('Lanjut'), button:has-text('Kirim'), button:has-text('Lanjutkan')").first
-            await next_btn.click(timeout=20000)
-
-            popup_detected = False
-            for _ in range(20):
                 try:
-                    popup = page.locator("text=/email.*sudah.*digunakan|email.*already.*used|already used|email used/i").first
-                    if await popup.count() > 0:
-                        popup_detected = True
-                        break
-                except Exception:
-                    pass
-                await asyncio.sleep(0.5)
-
-            if popup_detected:
-                logger.warning("Popup email sudah digunakan muncul. Mengganti email saja.")
-                await status_callback("⚠️ Email sudah digunakan. Mengganti email lain dan melanjutkan...")
-
-                close_btn = page.locator("button:has-text('x'), [aria-label='Close'], [data-dismiss='alert']").first
-                try:
-                    if await close_btn.count() > 0:
-                        await close_btn.click(timeout=5000)
+                    await page.locator("button:has-text('Setuju'), button:has-text('Agree'), button:has-text('I agree')").first.click(timeout=8000)
                 except Exception:
                     pass
 
-                temp.email = ""
-                await temp.create_account(status_callback=status_callback)
-                logger.info("Email baru setelah popup: %s", temp.email)
+                try:
+                    await page.get_by_text("Mulai Isi Data", exact=True).click(timeout=15000)
+                except Exception:
+                    pass
+
+                logger.info("Mengisi 3 form: Nama Lengkap, Email, Nomor WhatsApp")
+                await status_callback("📝 Mengisi Nama Lengkap, Email, dan Nomor WhatsApp...")
+                await page.get_by_label("Nama Lengkap").fill(full_name)
                 await page.get_by_label("Email").fill(temp.email)
+                await page.get_by_label("Nomor WhatsApp").fill(whatsapp)
 
+                logger.info("Centang syarat dan ketentuan")
+                await status_callback("✅ Mencentang syarat & ketentuan...")
                 try:
                     await page.locator("input[type='checkbox']").last.check(timeout=10000)
                 except Exception:
                     await page.evaluate("""() => {
-                        const list = Array.from(document.querySelectorAll('input[type="checkbox"]'));
-                        const target = list.find(cb => {
+                        const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
+                        const target = checkboxes.find(cb => {
                             const text = (cb.closest('label')?.innerText || cb.parentElement?.innerText || '').toLowerCase();
                             return text.includes('syarat') || text.includes('ketentuan');
-                        }) || list[0];
+                        }) || checkboxes[0];
                         if (target) {
                             target.checked = true;
                             target.dispatchEvent(new Event('change', { bubbles: true }));
                         }
                     }""")
 
+                logger.info("Tekan lanjut")
+                await status_callback("➡️ Menekan tombol Lanjut...")
+                next_btn = page.locator("button:has-text('Lanjut'), button:has-text('Kirim'), button:has-text('Lanjutkan')").first
                 await next_btn.click(timeout=20000)
+
+                popup_detected = False
+                security_popup_detected = False
+                for _ in range(20):
+                    try:
+                        security_popup = page.locator("text=/verifikasi keamanan gagal|security verification failed|verification failed|verifikasi keamanan/i").first
+                        if await security_popup.count() > 0:
+                            security_popup_detected = True
+                            break
+                    except Exception:
+                        pass
+                    try:
+                        email_popup = page.locator("text=/email.*sudah.*digunakan|email.*already.*used|already used|email used/i").first
+                        if await email_popup.count() > 0:
+                            popup_detected = True
+                            break
+                    except Exception:
+                        pass
+                    await asyncio.sleep(0.5)
+
+                if security_popup_detected:
+                    logger.warning("Popup verifikasi keamanan gagal muncul. Reload halaman dan mulai ulang form.")
+                    await status_callback("⚠️ Verifikasi keamanan gagal. Reload halaman dan mulai isi form lagi...")
+                    await asyncio.sleep(1)
+                    continue
+
+                if popup_detected:
+                    logger.warning("Popup email sudah digunakan muncul. Mengganti email saja.")
+                    await status_callback("⚠️ Email sudah digunakan. Mengganti email lain dan melanjutkan...")
+
+                    close_btn = page.locator("button:has-text('x'), [aria-label='Close'], [data-dismiss='alert']").first
+                    try:
+                        if await close_btn.count() > 0:
+                            await close_btn.click(timeout=5000)
+                    except Exception:
+                        pass
+
+                    temp.email = ""
+                    await temp.create_account(status_callback=status_callback)
+                    logger.info("Email baru setelah popup: %s", temp.email)
+                    await page.get_by_label("Email").fill(temp.email)
+
+                    try:
+                        await page.locator("input[type='checkbox']").last.check(timeout=10000)
+                    except Exception:
+                        await page.evaluate("""() => {
+                            const list = Array.from(document.querySelectorAll('input[type="checkbox"]'));
+                            const target = list.find(cb => {
+                                const text = (cb.closest('label')?.innerText || cb.parentElement?.innerText || '').toLowerCase();
+                                return text.includes('syarat') || text.includes('ketentuan');
+                            }) || list[0];
+                            if (target) {
+                                target.checked = true;
+                                target.dispatchEvent(new Event('change', { bubbles: true }));
+                            }
+                        }""")
+
+                    await next_btn.click(timeout=20000)
+                    continue
+
+                break
 
             logger.info("Menunggu kode 6 digit masuk ke email temporari")
             await status_callback(f"⏳ Menunggu kode 6 digit masuk ke email temporari: {temp.email}")
@@ -431,7 +433,7 @@ async def process_xl_esim(chat_id, status_callback):
                 raise Exception("Timeout: kode 6 digit tidak diterima di email temporari.")
 
             logger.info(f"Kode OTP diterima: {otp}")
-            await status_callback(f"✅ Kode OTP diterima: {otp}. Memasukkan ke halaman...")
+            await status_callback(f"✅ [LOG OTP] OTP masuk ke email: {otp}. Memasukkan ke halaman...")
             try:
                 otp_input = page.locator("input[type='text'], input[type='tel'], input").first
                 await otp_input.click(timeout=10000)
