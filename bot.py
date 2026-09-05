@@ -33,7 +33,7 @@ RAPIDAPI_HOST = (
     or os.getenv("EMAIL_PROVIDER_BASE_URL")
     or os.getenv("RUN2MAIL_BASE_URL")
     or os.getenv("TEMPMAIL_BASE_URL")
-    or "temporary-gmail-account.p.rapidapi.com"
+    or "free-gmail-api.p.rapidapi.com"
 ).strip().replace("https://", "").replace("http://", "").rstrip("/")
 
 EMAIL_PROVIDER_BASE_URL = f"https://{RAPIDAPI_HOST}"
@@ -114,17 +114,32 @@ class Run2MailBot:
                     return nested
         return []
 
+    def _extract_message_id(self, msg):
+        if not isinstance(msg, dict):
+            return None
+        for key in ("messageID", "message_id", "id"):
+            val = msg.get(key)
+            if isinstance(val, str) and val:
+                return val
+        return None
+
     def _candidate_urls(self, kind):
         base = self.base_url.rstrip("/")
         if kind == "create":
             return [
+                f"{base}/generate-email",
                 f"{base}/GmailGetAccount",
                 f"{base}/GetAccount",
             ]
         if kind == "messages":
             return [
+                f"{base}/message-list",
                 f"{base}/GmailGetMessages",
                 f"{base}/GetMessages",
+            ]
+        if kind == "message_details":
+            return [
+                f"{base}/message-details",
                 f"{base}/GmailGetMessage",
                 f"{base}/GetMessage",
             ]
@@ -186,7 +201,7 @@ class Run2MailBot:
         if not self.api_key:
             raise RuntimeError("RAPIDAPI_KEY belum diisi di Railway / environment.")
 
-        payload = {"generateNewAccount": 0}
+        payload = {"email": ["Gmail"]}
         last_error = None
         attempts = 0
 
@@ -248,10 +263,7 @@ class Run2MailBot:
         if not self.email:
             await self.create_account()
 
-        if not self.token:
-            raise RuntimeError("Token Temporary Gmail Account belum tersedia. Silakan cek response dari GmailGetAccount.")
-
-        payload = {"address": self.email, "token": self.token}
+        payload = {"email": self.email}
         last_error = None
 
         for url in self._candidate_urls("messages"):
@@ -259,12 +271,40 @@ class Run2MailBot:
                 resp = await self._request("POST", url, json=payload)
                 items = self._extract_messages_from_payload(resp)
                 if items:
-                    return items
+                    detailed = []
+                    for item in items:
+                        message_id = self._extract_message_id(item)
+                        if message_id:
+                            detail = await self._get_message_details(message_id)
+                            if detail:
+                                detailed.append(detail)
+                                continue
+                        detailed.append(item)
+                    return detailed
                 last_error = resp
             except Exception as e:
                 last_error = {"error": str(e), "url": url}
 
         return []
+
+    async def _get_message_details(self, message_id):
+        if not message_id:
+            return {}
+
+        payload = {"email": self.email, "message_id": message_id}
+        for url in self._candidate_urls("message_details"):
+            try:
+                resp = await self._request("POST", url, json=payload)
+                if isinstance(resp, dict) and (
+                    "refined_content" in resp
+                    or "subject" in resp
+                    or "from" in resp
+                    or "id" in resp
+                ):
+                    return resp
+            except Exception:
+                continue
+        return {}
 
     async def fetch_otp(self, timeout=60):
         start_time = asyncio.get_event_loop().time()
@@ -272,14 +312,22 @@ class Run2MailBot:
             try:
                 messages = await self._get_messages()
                 for msg in messages:
-                    raw_text = self._normalize_text(msg.get('text') or msg.get('body') or msg.get('content') or msg.get('plain') or '')
+                    raw_text = self._normalize_text(
+                        msg.get('refined_content')
+                        or msg.get('text')
+                        or msg.get('body')
+                        or msg.get('content')
+                        or msg.get('plain')
+                        or ''
+                    )
                     raw_html = self._normalize_text(msg.get('html') or msg.get('body_html') or msg.get('content_html') or '')
                     subject = self._normalize_text(msg.get('subject') or msg.get('title') or '')
-                    combined_content = f"{subject} {raw_text} {raw_html}"
+                    sender = self._normalize_text(msg.get('from') or msg.get('sender') or '')
+                    combined_content = f"{subject} {sender} {raw_text} {raw_html}"
 
                     match = re.search(r'(?:otp\s*code|kode\s*konfirmasi|otp)[:\s\-]*([A-Za-z0-9]{6})', combined_content, re.IGNORECASE)
                     if match:
-                        logger.info(f"OTP berhasil dibaca dari Run2Mail: {match.group(1)}")
+                        logger.info(f"OTP berhasil dibaca dari Free-Gmail-API: {match.group(1)}")
                         return match.group(1).strip()
 
                     words = re.findall(r'\b[A-Z0-9]{6}\b', combined_content)
@@ -297,7 +345,14 @@ class Run2MailBot:
             try:
                 messages = await self._get_messages()
                 for msg in messages:
-                    raw_text = self._normalize_text(msg.get('text') or msg.get('body') or msg.get('content') or msg.get('plain') or '')
+                    raw_text = self._normalize_text(
+                        msg.get('refined_content')
+                        or msg.get('text')
+                        or msg.get('body')
+                        or msg.get('content')
+                        or msg.get('plain')
+                        or ''
+                    )
                     raw_html = self._normalize_text(msg.get('html') or msg.get('body_html') or msg.get('content_html') or '')
                     subject = self._normalize_text(msg.get('subject') or msg.get('title') or '')
 
@@ -306,7 +361,7 @@ class Run2MailBot:
 
                     combined_content = f"{subject}\n{raw_text}\n{raw_html}"
                     if 'MSISDN' in combined_content or 'Activation Code' in combined_content or 'eSIM' in combined_content:
-                        logger.info("Email eSIM XL ditemukan di Run2Mail, mengekstrak detail...")
+                        logger.info("Email eSIM XL ditemukan di Free-Gmail-API, mengekstrak detail...")
 
                         msisdn = re.search(r'MSISDN\s*[:\s\-]*([0-9\+\s]+)', combined_content, re.IGNORECASE)
                         puk = re.search(r'(?:Kode\s*PUK|PUK)\s*[:\s\-]*([0-9\s]+)', combined_content, re.IGNORECASE)
