@@ -181,7 +181,7 @@ class Run2MailBot:
                 except Exception:
                     return {"status": r.status, "raw": text}
 
-    async def create_account(self):
+    async def create_account(self, status_callback=None):
         if self.email:
             logger.info(f"Inbox email yang dipakai: {self.email}")
             return
@@ -191,22 +191,57 @@ class Run2MailBot:
 
         payload = {"generateNewAccount": 0}
         last_error = None
+        attempts = 0
 
-        for url in self._candidate_urls("create"):
-            try:
-                resp = await self._request("POST", url, json=payload)
-                email = self._extract_email_from_payload(resp)
-                token = self._extract_token_from_payload(resp)
+        while attempts < 10:
+            attempts += 1
+            for url in self._candidate_urls("create"):
+                try:
+                    resp = await self._request("POST", url, json=payload)
+                    email = self._extract_email_from_payload(resp)
+                    token = self._extract_token_from_payload(resp)
 
-                if email:
-                    self.email = email
+                    if not email:
+                        last_error = resp
+                        continue
+
+                    if "+" in email.split("@", 1)[0]:
+                        logger.warning(
+                            "Email temporari hasil RapidAPI mengandung '+' (%s). Membatalkan dan generate ulang inbox baru.",
+                            email,
+                        )
+                        if status_callback:
+                            await status_callback(
+                                f"⚠️ [EMAIL] Inbox hasil RapidAPI mengandung '+' ({email}). Membatalkan dan generate ulang inbox baru..."
+                            )
+                        last_error = {"reason": "plus_sign_detected", "email": email}
+                        break
+
                     if token:
                         self.token = token
-                    logger.info(f"Inbox email dibuat dari Temporary Gmail Account: {self.email}")
+                    self.email = email
+                    logger.info("Inbox email dibuat dari Temporary Gmail Account: %s", self.email)
                     return
-                last_error = resp
-            except Exception as e:
-                last_error = {"error": str(e), "url": url}
+                except Exception as e:
+                    last_error = {"error": str(e), "url": url}
+
+            if last_error and isinstance(last_error, dict) and last_error.get("reason") == "plus_sign_detected":
+                logger.info("Retry generate account karena email mengandung '+'; percobaan ke-%s/10", attempts)
+                if status_callback:
+                    await status_callback(
+                        f"🔄 [EMAIL] Mencoba generate inbox baru karena email invalid: {last_error.get('email')} (percobaan {attempts}/10)"
+                    )
+                await asyncio.sleep(1)
+                continue
+
+            if last_error and isinstance(last_error, dict) and last_error.get("error"):
+                logger.warning("Create account gagal, retrying... detail=%s", last_error)
+                if status_callback:
+                    await status_callback(f"⚠️ [EMAIL] Generate inbox gagal, retrying... detail: {last_error}")
+                await asyncio.sleep(1)
+                continue
+
+            break
 
         raise RuntimeError(f"Temporary Gmail Account gagal membuat inbox. Response: {last_error}")
 
@@ -304,7 +339,7 @@ MailTMBot = Run2MailBot
 
 async def process_xl_esim(chat_id, status_callback):
     temp = MailTMBot()
-    await temp.create_account()
+    await temp.create_account(status_callback=status_callback)
 
     full_name = f"mhmdsari{''.join(random.choices(string.ascii_lowercase + string.digits, k=4))}xlstore"
     whatsapp = "08" + ''.join(random.choices(string.digits, k=9))
