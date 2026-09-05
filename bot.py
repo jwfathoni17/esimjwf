@@ -166,40 +166,67 @@ async def process_xl_esim(chat_id, status_callback):
             logger.info("Membuka halaman XL...")
             await status_callback("🌐 [LOG: 1/7] Membuka halaman XL eSIM Trial...")
             await page.goto("https://www.xl.co.id/esim-trial/claim", timeout=90000, wait_until="domcontentloaded")
+            await asyncio.sleep(1.5)
+
+            logger.info("Klik Setuju cookie...")
+            await status_callback("🍪 [LOG: 2/7] Menyetujui cookie policy...")
+            try:
+                await page.locator("button:has-text('Setuju'), button:has-text('Agree'), button:has-text('I agree'), button:has-text('Accept')").first.click(timeout=10000)
+                await asyncio.sleep(1.0)
+            except Exception:
+                pass
 
             logger.info("Klik mulai...")
-            await status_callback("🖱️ [LOG: 2/7] Klik tombol mulai...")
+            await status_callback("🖱️ [LOG: 3/7] Klik tombol mulai...")
             try:
                 await page.wait_for_selector("text=Mulai Isi Data", timeout=20000)
                 await page.get_by_text("Mulai Isi Data").first.click()
+                await asyncio.sleep(1.2)
             except Exception:
                 await page.click("button:has-text('Mulai Isi Data')", timeout=5000)
-            
-            await asyncio.sleep(2)
+                await asyncio.sleep(1.2)
 
             logger.info("Isi data...")
-            await status_callback("📝 [LOG: 3/7] Mengisi data diri otomatis...")
+            await status_callback("📝 [LOG: 4/7] Mengisi data diri otomatis...")
             try:
                 inputs = await page.locator("input").all()
                 if len(inputs) >= 3:
                     await inputs[0].fill(full_name)
+                    await asyncio.sleep(0.3)
                     await inputs[1].fill(temp.email)
+                    await asyncio.sleep(0.3)
                     await inputs[2].fill(whatsapp)
+                    await asyncio.sleep(0.5)
                 else:
                     raise Exception("Gagal mendeteksi input form")
             except Exception as e:
                 logger.error(f"Error isi data: {e}")
                 raise Exception("Error: Form input tidak ditemukan.")
 
+            logger.info("Centang syarat dan ketentuan")
+            await status_callback("✅ [LOG: 5/7] Mencentang syarat & ketentuan...")
+            try:
+                checkbox = page.locator("input[type='checkbox']").last
+                await checkbox.check(timeout=10000)
+                await asyncio.sleep(0.6)
+            except Exception:
+                try:
+                    await page.locator("label:has-text('Syarat'), label:has-text('Ketentuan')").first.click(timeout=10000)
+                    await asyncio.sleep(0.6)
+                except Exception:
+                    pass
+
             logger.info("Kirim OTP...")
-            await status_callback("📤 [LOG: 4/7] Mengirim permintaan OTP...")
+            await status_callback("📤 [LOG: 6/7] Mengirim permintaan OTP...")
             try:
                 await page.get_by_role("button", name="Lanjut").click(timeout=15000)
+                await asyncio.sleep(1.2)
             except Exception:
                 await page.click("button:has-text('Lanjut'), button:has-text('Kirim')")
+                await asyncio.sleep(1.2)
 
             logger.info("Menunggu OTP...")
-            await status_callback(f"⏳ [LOG: 5/7] Menunggu OTP masuk ke `{temp.email}`...")
+            await status_callback(f"⏳ [LOG: 7/7] Menunggu OTP masuk ke `{temp.email}`...")
             otp = await temp.fetch_otp(timeout=60)
             
             if not otp: 
@@ -211,10 +238,12 @@ async def process_xl_esim(chat_id, status_callback):
             
             try:
                 await page.locator("input").first.click()
+                await asyncio.sleep(0.5)
             except Exception:
                 pass
             
             await page.keyboard.type(otp, delay=150)
+            await asyncio.sleep(0.8)
 
             logger.info("Konfirmasi OTP...")
             await status_callback("📤 [LOG: Konfirmasi OTP] Menekan tombol Lanjut...")
