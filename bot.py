@@ -176,6 +176,18 @@ async def process_xl_esim(chat_id, status_callback):
                 logger.error(f"Error isi data: {e}")
                 raise Exception("Error: Form input tidak ditemukan.")
 
+            logger.info("Menyetujui Syarat & Ketentuan serta Kebijakan Privasi...")
+            try:
+                checkbox = page.locator("input[type='checkbox']").first
+                if await checkbox.count() == 0:
+                    checkbox = page.get_by_role("checkbox").first
+                if await checkbox.count() == 0:
+                    raise Exception("Checkbox persetujuan tidak ditemukan")
+                await checkbox.check(force=True)
+            except Exception as e:
+                logger.error(f"Error mencentang persetujuan: {e}")
+                raise Exception("Error: Checklist Syarat & Ketentuan/Kebijakan Privasi tidak ditemukan.")
+
             logger.info("Kirim OTP...")
             await status_callback("📤 [LOG: 4/7] Mengirim permintaan OTP...")
             try:
