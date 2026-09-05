@@ -190,7 +190,7 @@ async def process_xl_esim(chat_id, status_callback):
 
                 logger.info("Membuka halaman dan menunggu form siap...")
                 await status_callback("🌐 [LOG: 2/7] Halaman dibuka dan menunggu form siap...")
-                await asyncio.sleep(1.5)
+                await asyncio.sleep(2.5)
 
                 logger.info("Klik mulai isi data...")
                 await status_callback("🖱️ [LOG: 3/7] Klik tombol mulai isi data...")
@@ -198,11 +198,11 @@ async def process_xl_esim(chat_id, status_callback):
                     start_btn = page.get_by_text("Mulai Isi Data", exact=True).first
                     if await start_btn.is_visible(timeout=10000):
                         await start_btn.click(timeout=15000)
-                        await asyncio.sleep(1.5)
+                        await asyncio.sleep(2.0)
                 except Exception:
                     try:
                         await page.click("button:has-text('Mulai Isi Data')", timeout=15000)
-                        await asyncio.sleep(1.5)
+                        await asyncio.sleep(2.0)
                     except Exception:
                         pass
 
@@ -212,11 +212,11 @@ async def process_xl_esim(chat_id, status_callback):
                     inputs = await page.locator("input").all()
                     if len(inputs) >= 3:
                         await inputs[0].fill(full_name)
-                        await asyncio.sleep(0.4)
-                        await inputs[1].fill(temp.email)
-                        await asyncio.sleep(0.4)
-                        await inputs[2].fill(whatsapp)
                         await asyncio.sleep(0.6)
+                        await inputs[1].fill(temp.email)
+                        await asyncio.sleep(0.6)
+                        await inputs[2].fill(whatsapp)
+                        await asyncio.sleep(1.0)
                     else:
                         raise Exception("Gagal mendeteksi input form")
                 except Exception as e:
@@ -228,11 +228,11 @@ async def process_xl_esim(chat_id, status_callback):
                 try:
                     checkbox = page.locator("input[type='checkbox']").last
                     await checkbox.check(timeout=15000)
-                    await asyncio.sleep(0.8)
+                    await asyncio.sleep(1.2)
                 except Exception:
                     try:
                         await page.locator("label:has-text('Syarat'), label:has-text('Ketentuan')").first.click(timeout=15000)
-                        await asyncio.sleep(0.8)
+                        await asyncio.sleep(1.2)
                     except Exception:
                         pass
 
@@ -240,10 +240,10 @@ async def process_xl_esim(chat_id, status_callback):
                 await status_callback("📤 [LOG: 6/7] Menekan tombol lanjut...")
                 try:
                     await page.get_by_role("button", name="Lanjut").click(timeout=20000)
-                    await asyncio.sleep(2.0)
+                    await asyncio.sleep(1.5)
                 except Exception:
                     await page.click("button:has-text('Lanjut'), button:has-text('Kirim')", timeout=20000)
-                    await asyncio.sleep(2.0)
+                    await asyncio.sleep(1.5)
 
                 logger.info("Ambil screenshot setelah klik lanjut")
                 await status_callback("📸 [LOG: 7/7] Mengambil screenshot setelah tombol lanjut...")
