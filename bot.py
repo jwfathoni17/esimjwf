@@ -33,12 +33,12 @@ RAPIDAPI_HOST = (
     or os.getenv("EMAIL_PROVIDER_BASE_URL")
     or os.getenv("RUN2MAIL_BASE_URL")
     or os.getenv("TEMPMAIL_BASE_URL")
-    or "free-gmail-api.p.rapidapi.com"
+    or "gmailnator.p.rapidapi.com"
 ).strip().replace("https://", "").replace("http://", "").rstrip("/")
 
 # Force the bot to use the active provider when stale env vars still point to old temporary-mail APIs.
-if "temporary-gmail-account" in RAPIDAPI_HOST or "run2mail" in RAPIDAPI_HOST or "tempmail" in RAPIDAPI_HOST:
-    RAPIDAPI_HOST = "free-gmail-api.p.rapidapi.com"
+if any(v in RAPIDAPI_HOST.lower() for v in ("temporary-gmail-account", "run2mail", "tempmail", "free-gmail-api")):
+    RAPIDAPI_HOST = "gmailnator.p.rapidapi.com"
 
 EMAIL_PROVIDER_BASE_URL = f"https://{RAPIDAPI_HOST}"
 EMAIL_ACCOUNT = os.getenv("EMAIL_ACCOUNT") or os.getenv("RUN2MAIL_EMAIL") or ""
@@ -83,6 +83,12 @@ class Run2MailBot:
             value = payload.get(key)
             if isinstance(value, str) and "@" in value:
                 return value
+        results = payload.get("results")
+        if isinstance(results, list):
+            for item in results:
+                email = self._extract_email_from_payload(item)
+                if email:
+                    return email
         for nested_key in ("data", "result", "account", "accountDetails"):
             nested = payload.get(nested_key)
             if isinstance(nested, dict):
@@ -131,21 +137,13 @@ class Run2MailBot:
         base = self.base_url.rstrip("/")
         if kind == "create":
             return [
+                f"{base}/api/emails/generate",
                 f"{base}/generate-email",
-                f"{base}/GmailGetAccount",
-                f"{base}/GetAccount",
             ]
         if kind == "messages":
             return [
+                f"{base}/api/inbox/",
                 f"{base}/message-list",
-                f"{base}/GmailGetMessages",
-                f"{base}/GetMessages",
-            ]
-        if kind == "message_details":
-            return [
-                f"{base}/message-details",
-                f"{base}/GmailGetMessage",
-                f"{base}/GetMessage",
             ]
         return [base]
 
@@ -205,7 +203,7 @@ class Run2MailBot:
         if not self.api_key:
             raise RuntimeError("RAPIDAPI_KEY belum diisi di Railway / environment.")
 
-        payload = {"email": ["Gmail"]}
+        payload = {"type": ["public_gmail_dot", "private_gmail_dot"]}
         last_error = None
         attempts = 0
 
@@ -267,7 +265,7 @@ class Run2MailBot:
         if not self.email:
             await self.create_account()
 
-        payload = {"email": self.email}
+        payload = {"email": self.email, "limit": 20}
         last_error = None
 
         for url in self._candidate_urls("messages"):
@@ -295,19 +293,19 @@ class Run2MailBot:
         if not message_id:
             return {}
 
-        payload = {"email": self.email, "message_id": message_id}
-        for url in self._candidate_urls("message_details"):
-            try:
-                resp = await self._request("POST", url, json=payload)
-                if isinstance(resp, dict) and (
-                    "refined_content" in resp
-                    or "subject" in resp
-                    or "from" in resp
-                    or "id" in resp
-                ):
-                    return resp
-            except Exception:
-                continue
+        base = self.base_url.rstrip("/")
+        url = f"{base}/api/inbox/{message_id}"
+        try:
+            resp = await self._request("GET", url)
+            if isinstance(resp, dict) and (
+                "content" in resp
+                or "subject" in resp
+                or "from" in resp
+                or "id" in resp
+            ):
+                return resp
+        except Exception:
+            pass
         return {}
 
     async def fetch_otp(self, timeout=60):
@@ -317,10 +315,10 @@ class Run2MailBot:
                 messages = await self._get_messages()
                 for msg in messages:
                     raw_text = self._normalize_text(
-                        msg.get('refined_content')
+                        msg.get('content')
+                        or msg.get('refined_content')
                         or msg.get('text')
                         or msg.get('body')
-                        or msg.get('content')
                         or msg.get('plain')
                         or ''
                     )
