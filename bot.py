@@ -40,6 +40,21 @@ def claim_menu():
         [InlineKeyboardButton("🗨️ Channel Update", url="https://t.me/forarieyproject")]
     ])
 
+async def dismiss_cookie_popup(page):
+    cookie_button = page.get_by_role("button", name=re.compile(r"^\s*Setuju\s*$", re.IGNORECASE)).first
+    if await cookie_button.count() == 0:
+        cookie_button = page.locator("button").filter(
+            has_text=re.compile(r"^\s*Setuju\s*$", re.IGNORECASE)
+        ).first
+
+    if await cookie_button.count() > 0 and await cookie_button.is_visible():
+        try:
+            await cookie_button.click(force=True, timeout=5000)
+            await asyncio.sleep(0.5)
+            logger.info("Popup cookie ditutup")
+        except Exception as e:
+            logger.warning(f"Popup cookie ditemukan tetapi gagal ditutup: {e}")
+
 async def is_user_joined(context, user_id):
     try:
         member = await context.bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
@@ -166,6 +181,7 @@ async def process_xl_esim(chat_id, status_callback, email=None):
             logger.info("Membuka halaman XL...")
             await status_callback("🌐 [LOG: 1/7] Membuka halaman XL eSIM Trial...")
             await page.goto("https://www.xl.co.id/esim-trial/claim", timeout=90000, wait_until="domcontentloaded")
+            await dismiss_cookie_popup(page)
 
             logger.info("Klik mulai...")
             await status_callback("🖱️ [LOG: 2/7] Klik tombol mulai...")
@@ -206,6 +222,7 @@ async def process_xl_esim(chat_id, status_callback, email=None):
             logger.info("Kirim OTP...")
             await status_callback("📤 [LOG: 4/7] Mengirim permintaan OTP...")
             try:
+                await dismiss_cookie_popup(page)
                 lanjut_button = page.locator("button").filter(has_text=re.compile(r"^\s*Lanjut\s*$", re.IGNORECASE)).last
                 if await lanjut_button.count() == 0:
                     lanjut_button = page.get_by_role("button", name=re.compile(r"^\s*Lanjut\s*$", re.IGNORECASE)).last
