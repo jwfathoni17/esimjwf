@@ -19,22 +19,24 @@ GROUP_ID = int(os.getenv("GROUP_ID", "-1003928341140"))
 CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "@esimjwf")
 ADMIN_ID = 1294583646
 
-# --- ENV: generic / single master key ---
-APIKEY_MASTER = (
-    os.getenv("APIKEY_MASTER")
-    or os.getenv("RAPIDAPI_KEY")
+# --- RapidAPI Temporary Gmail Account specific config ---
+RAPIDAPI_KEY = (
+    os.getenv("RAPIDAPI_KEY")
+    or os.getenv("APIKEY_MASTER")
     or os.getenv("RUN2MAIL_API_KEY")
     or os.getenv("TEMPMAIL_API_KEY")
     or ""
 ).strip()
 
-EMAIL_PROVIDER_BASE_URL = (
-    os.getenv("EMAIL_PROVIDER_BASE_URL")
+RAPIDAPI_HOST = (
+    os.getenv("RAPIDAPI_HOST")
+    or os.getenv("EMAIL_PROVIDER_BASE_URL")
     or os.getenv("RUN2MAIL_BASE_URL")
     or os.getenv("TEMPMAIL_BASE_URL")
-    or "https://run2mail.com"
-).strip()
+    or "temporary-gmail-account.p.rapidapi.com"
+).strip().replace("https://", "").replace("http://", "").rstrip("/")
 
+EMAIL_PROVIDER_BASE_URL = f"https://{RAPIDAPI_HOST}"
 EMAIL_ACCOUNT = os.getenv("EMAIL_ACCOUNT") or os.getenv("RUN2MAIL_EMAIL") or ""
 EMAIL_INBOX_ID = os.getenv("EMAIL_INBOX_ID") or os.getenv("RUN2MAIL_INBOX_ID") or ""
 
@@ -57,19 +59,79 @@ async def is_user_joined(context, user_id):
 
 class Run2MailBot:
     def __init__(self):
-        self.base_url = EMAIL_PROVIDER_BASE_URL
-        self.api_key = APIKEY_MASTER
+        self.base_url = EMAIL_PROVIDER_BASE_URL.rstrip("/")
+        self.api_key = RAPIDAPI_KEY
         self.email = EMAIL_ACCOUNT
         self.inbox_id = EMAIL_INBOX_ID
-        self.auth_mode = "rapidapi" if "rapidapi" in self.base_url.lower() else "bearer"
+        self.token = os.getenv("TEMP_GMAIL_TOKEN", "")
+        self.auth_mode = "rapidapi"
         self.headers = {"Accept": "application/json"}
 
         if self.api_key:
-            if self.auth_mode == "rapidapi":
-                self.headers["x-rapidapi-key"] = self.api_key
-                self.headers["x-rapidapi-host"] = self.base_url.replace("https://", "").replace("http://", "").rstrip("/")
-            else:
-                self.headers["Authorization"] = f"Bearer {self.api_key}"
+            self.headers["x-rapidapi-key"] = self.api_key
+            self.headers["x-rapidapi-host"] = RAPIDAPI_HOST
+            self.headers["Content-Type"] = "application/json"
+
+    def _extract_email_from_payload(self, payload):
+        if not isinstance(payload, dict):
+            return None
+        for key in ("email", "address", "username", "mail", "account", "gmail"):
+            value = payload.get(key)
+            if isinstance(value, str) and "@" in value:
+                return value
+        for nested_key in ("data", "result", "account", "accountDetails"):
+            nested = payload.get(nested_key)
+            if isinstance(nested, dict):
+                email = self._extract_email_from_payload(nested)
+                if email:
+                    return email
+        return None
+
+    def _extract_token_from_payload(self, payload):
+        if not isinstance(payload, dict):
+            return None
+        for key in ("token", "accessToken", "generatedToken", "authToken"):
+            value = payload.get(key)
+            if isinstance(value, str) and value:
+                return value
+        data = payload.get("data")
+        if isinstance(data, dict):
+            return self._extract_token_from_payload(data)
+        return None
+
+    def _extract_messages_from_payload(self, payload):
+        if isinstance(payload, list):
+            return payload
+        if not isinstance(payload, dict):
+            return []
+        for key in ("messages", "data", "result", "items", "message"):
+            val = payload.get(key)
+            if isinstance(val, list):
+                return val
+            if isinstance(val, dict):
+                nested = self._extract_messages_from_payload(val)
+                if nested:
+                    return nested
+        return []
+
+    def _candidate_urls(self, kind):
+        base = self.base_url.rstrip("/")
+        if kind == "create":
+            return [
+                f"{base}/GmailGetAccount",
+                f"{base}/GetAccount",
+                f"{base}/api/v1/account",
+                f"{base}/api/v1/emails/create",
+            ]
+        if kind == "messages":
+            return [
+                f"{base}/GmailGetMessages",
+                f"{base}/GetMessages",
+                f"{base}/GmailGetMessage",
+                f"{base}/GetMessage",
+                f"{base}/api/v1/messages",
+            ]
+        return [base]
 
     def _normalize_text(self, value):
         if value is None:
@@ -125,41 +187,49 @@ class Run2MailBot:
             return
 
         if not self.api_key:
-            raise RuntimeError("APIKEY_MASTER belum diisi di Railway / environment.")
+            raise RuntimeError("RAPIDAPI_KEY belum diisi di Railway / environment.")
 
-        payload = {"type": "gmail"}
-        url = f"{self.base_url.rstrip('/')}/api/v1/emails/create"
-        resp = await self._request("POST", url, json=payload)
-        data = resp.get("data") if isinstance(resp, dict) else {}
-        email = None
+        payload = {"generateNewAccount": 0}
+        last_error = None
 
-        if isinstance(data, dict):
-            email = data.get("email") or data.get("address") or data.get("username")
-        if not email:
-            email = resp.get("email") or resp.get("address") or resp.get("username")
+        for url in self._candidate_urls("create"):
+            try:
+                resp = await self._request("POST", url, json=payload)
+                email = self._extract_email_from_payload(resp)
+                token = self._extract_token_from_payload(resp)
 
-        if not email:
-            raise RuntimeError(f"Run2Mail gagal membuat inbox. Response: {resp}")
+                if email:
+                    self.email = email
+                    if token:
+                        self.token = token
+                    logger.info(f"Inbox email dibuat dari Temporary Gmail Account: {self.email}")
+                    return
+                last_error = resp
+            except Exception as e:
+                last_error = {"error": str(e), "url": url}
 
-        self.email = email
-        logger.info(f"Akun Run2Mail dibuat: {self.email}")
+        raise RuntimeError(f"Temporary Gmail Account gagal membuat inbox. Response: {last_error}")
 
     async def _get_messages(self):
         if not self.email:
             await self.create_account()
 
-        encoded_email = quote(self.email, safe="")
-        url = f"{self.base_url.rstrip('/')}/api/v1/emails/{encoded_email}/messages"
-        resp = await self._request("GET", url)
-        items = self._extract_items(resp)
-        if items:
-            return items
+        if not self.token:
+            raise RuntimeError("Token Temporary Gmail Account belum tersedia. Silakan cek response dari GmailGetAccount.")
 
-        if isinstance(resp, dict):
-            if isinstance(resp.get("data"), dict):
-                nested = resp["data"].get("messages")
-                if isinstance(nested, list):
-                    return nested
+        payload = {"address": self.email, "token": self.token}
+        last_error = None
+
+        for url in self._candidate_urls("messages"):
+            try:
+                resp = await self._request("POST", url, json=payload)
+                items = self._extract_messages_from_payload(resp)
+                if items:
+                    return items
+                last_error = resp
+            except Exception as e:
+                last_error = {"error": str(e), "url": url}
+
         return []
 
     async def fetch_otp(self, timeout=60):
