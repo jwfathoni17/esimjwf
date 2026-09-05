@@ -13,10 +13,10 @@ from playwright.async_api import async_playwright
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-TOKEN = "BOT_TOKENMU"
-GROUP_ID = -1003971893833
-CHANNEL_USERNAME = "@forarieyproject" 
-ADMIN_ID = 1564275538
+TOKEN = (os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("BOT_TOKEN") or "").strip()
+GROUP_ID = int(os.getenv("GROUP_ID", "-1001234567890"))
+CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "@esimjwf").strip()
+ADMIN_ID = int(os.getenv("ADMIN_ID", "1294583646"))
 
 app = FastAPI()
 telegram_app = None
@@ -37,24 +37,19 @@ async def is_user_joined(context, user_id):
 
 class MailTMBot:
     def __init__(self):
-        self.base_url = "https://api.mail.tm"
+        self.base_url = "https://temp.tf"
         self.email = ""
         self.token = ""
 
     async def create_account(self):
+        params = {"dot": 1, "providers": "gmail"}
         async with aiohttp.ClientSession() as session:
-            async with session.get(f"{self.base_url}/domains") as r:
-                domains = await r.json()
-                domain = domains['hydra:member'][0]['domain']
-                user = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
-                self.email = f"{user}@{domain}"
-            
-            payload = {"address": self.email, "password": "Password123!"}
-            await session.post(f"{self.base_url}/accounts", json=payload)
-            async with session.post(f"{self.base_url}/token", json=payload) as r:
-                data = await r.json()
-                self.token = data.get('token', '')
-        logger.info(f"Akun Mail.tm dibuat: {self.email}")
+            async with session.get(f"{self.base_url}/api/account", params=params, timeout=30) as r:
+                data = await r.json(content_type=None)
+                self.email = data.get("email")
+                if not self.email:
+                    raise RuntimeError(f"temp.tf gagal membuat email. Response: {data}")
+        logger.info(f"Akun temp.tf dibuat: {self.email}")
 
     async def fetch_otp(self, timeout=60):
         headers = {"Authorization": f"Bearer {self.token}"}
@@ -507,6 +502,8 @@ async def health_check():
 @app.on_event("startup")
 async def startup_event():
     global telegram_app
+    if not TOKEN:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN belum diisi di environment Railway.")
     telegram_app = Application.builder().token(TOKEN).build()
     telegram_app.add_handler(CommandHandler("start", start))
     telegram_app.add_handler(CommandHandler("stop", stop_command))
