@@ -120,8 +120,6 @@ class Run2MailBot:
             return [
                 f"{base}/GmailGetAccount",
                 f"{base}/GetAccount",
-                f"{base}/api/v1/account",
-                f"{base}/api/v1/emails/create",
             ]
         if kind == "messages":
             return [
@@ -129,7 +127,6 @@ class Run2MailBot:
                 f"{base}/GetMessages",
                 f"{base}/GmailGetMessage",
                 f"{base}/GetMessage",
-                f"{base}/api/v1/messages",
             ]
         return [base]
 
@@ -197,12 +194,14 @@ class Run2MailBot:
             attempts += 1
             for url in self._candidate_urls("create"):
                 try:
+                    logger.info("Mencoba generate inbox via RapidAPI endpoint: %s", url)
                     resp = await self._request("POST", url, json=payload)
                     email = self._extract_email_from_payload(resp)
                     token = self._extract_token_from_payload(resp)
 
                     if not email:
                         last_error = resp
+                        logger.warning("Response dari %s tidak mengandung email: %s", url, resp)
                         continue
 
                     if "+" in email.split("@", 1)[0]:
