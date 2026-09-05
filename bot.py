@@ -239,10 +239,10 @@ async def process_xl_esim(chat_id, status_callback):
                 logger.info("Tekan lanjut...")
                 await status_callback("📤 [LOG: 6/7] Menekan tombol lanjut...")
                 try:
-                    await page.get_by_role("button", name="Lanjut").click(timeout=20000)
+                    await page.get_by_role("button", name="Lanjut").click(timeout=10000)
                     await asyncio.sleep(1.5)
                 except Exception:
-                    await page.click("button:has-text('Lanjut'), button:has-text('Kirim')", timeout=20000)
+                    await page.click("button:has-text('Lanjut'), button:has-text('Kirim')", timeout=10000)
                     await asyncio.sleep(1.5)
 
                 logger.info("Ambil screenshot setelah klik lanjut")
