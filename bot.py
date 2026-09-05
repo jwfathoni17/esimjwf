@@ -223,22 +223,29 @@ async def process_xl_esim(chat_id, status_callback, email=None):
             await status_callback("📤 [LOG: 4/7] Mengirim permintaan OTP...")
             try:
                 await dismiss_cookie_popup(page)
-                lanjut_button = page.locator("button").filter(has_text=re.compile(r"^\s*Lanjut\s*$", re.IGNORECASE)).last
+                lanjut_button = page.locator("button.btn-claim.claim-cta").last
                 if await lanjut_button.count() == 0:
-                    lanjut_button = page.get_by_role("button", name=re.compile(r"^\s*Lanjut\s*$", re.IGNORECASE)).last
+                    lanjut_button = page.get_by_role(
+                        "button", name=re.compile(r"^\s*Lanjut\s*$", re.IGNORECASE)
+                    ).last
                 if await lanjut_button.count() == 0:
                     raise Exception("Tombol Lanjut tidak ditemukan")
 
+                await lanjut_button.wait_for(state="visible", timeout=15000)
                 await lanjut_button.scroll_into_view_if_needed()
-                await page.wait_for_function(
-                    "button => !button.disabled",
-                    arg=await lanjut_button.element_handle(),
-                    timeout=10000
-                )
-                await lanjut_button.click(force=True, timeout=15000)
+                if not await lanjut_button.is_enabled():
+                    raise Exception("Tombol Lanjut masih nonaktif")
+                try:
+                    await lanjut_button.click(timeout=15000)
+                except Exception:
+                    logger.warning("Klik Playwright gagal, mencoba event click pada tombol DOM")
+                    await lanjut_button.evaluate("button => button.click()")
                 await asyncio.sleep(1)
             except Exception as e:
-                logger.error(f"Error menekan tombol Lanjut: {e}")
+                button_html = "tidak tersedia"
+                if await lanjut_button.count() > 0:
+                    button_html = await lanjut_button.evaluate("button => button.outerHTML")
+                logger.error(f"Error menekan tombol Lanjut: {e}; HTML: {button_html}")
                 await page.screenshot(path=debug_path)
                 raise Exception("Error: Tombol Lanjut tidak dapat ditekan.")
 
