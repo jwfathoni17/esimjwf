@@ -100,7 +100,7 @@ class Run2MailBot:
         if not self.api_key:
             raise RuntimeError("RUN2MAIL_API_KEY belum diisi di Railway / environment.")
 
-        payload = {"type": "random"}
+        payload = {"type": "gmail"}
         url = f"{self.base_url.rstrip('/')}/api/v1/emails/create"
         resp = await self._request("POST", url, json=payload)
         data = resp.get("data") if isinstance(resp, dict) else {}
