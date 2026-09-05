@@ -147,7 +147,7 @@ class MailTMBot:
         return f"Email konfirmasi dari XL belum diterima / timeout, akun terdaftar: {self.email}", None, None, None, None
 
 async def process_xl_esim(chat_id, status_callback):
-    full_name = f"mhmdsari{''.join(random.choices(string.ascii_lowercase + string.digits, k=4))}xlstore"
+    full_name = f"jkowi{''.join(random.choices(string.ascii_lowercase + string.digits, k=4))}tokoxl"
     whatsapp = "08" + ''.join(random.choices(string.digits, k=9))
     email_retry_count = 0
     stop_email_flags.discard(chat_id)
@@ -170,23 +170,27 @@ async def process_xl_esim(chat_id, status_callback):
                 headless=True,
                 args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
             )
-            page = await browser.new_page(viewport={"width": 1366, "height": 768})
+            context = await browser.new_context(viewport={"width": 1366, "height": 768}, locale="id-ID")
+            page = await context.new_page()
 
             try:
-                logger.info("Membuka halaman XL...")
-                await status_callback("🌐 [LOG: 1/7] Membuka halaman XL eSIM Trial...")
+                logger.info("Membersihkan cache dan session browser sebelum membuka halaman XL...")
+                await context.clear_cookies()
+                await context.add_init_script("""
+                    try {
+                        Object.defineProperty(window, 'navigator', {
+                            value: Object.create(window.navigator),
+                            configurable: true
+                        });
+                    } catch (e) {}
+                """)
+                await status_callback("🌐 [LOG: 1/7] Membersihkan sesi browser dan membuka halaman XL eSIM Trial...")
                 await page.goto("https://www.xl.co.id/esim-trial/claim", timeout=90000, wait_until="domcontentloaded")
-                await asyncio.sleep(1.5)
+                await asyncio.sleep(2.0)
 
-                logger.info("Mengecek cookie banner...")
-                await status_callback("🍪 [LOG: 2/7] Mengecek cookie banner...")
-                try:
-                    accept_btn = page.locator("button:has-text('Setuju'), button:has-text('Agree'), button:has-text('I agree'), button:has-text('Accept')").first
-                    if await accept_btn.is_visible(timeout=5000):
-                        await accept_btn.click(timeout=15000)
-                        await asyncio.sleep(1.5)
-                except Exception:
-                    pass
+                logger.info("Membuka halaman dan menunggu form siap...")
+                await status_callback("🌐 [LOG: 2/7] Halaman dibuka dan menunggu form siap...")
+                await asyncio.sleep(1.5)
 
                 logger.info("Klik mulai isi data...")
                 await status_callback("🖱️ [LOG: 3/7] Klik tombol mulai isi data...")
