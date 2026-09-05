@@ -191,9 +191,24 @@ async def process_xl_esim(chat_id, status_callback):
             logger.info("Kirim OTP...")
             await status_callback("📤 [LOG: 4/7] Mengirim permintaan OTP...")
             try:
-                await page.get_by_role("button", name="Lanjut").click(timeout=15000)
-            except Exception:
-                await page.click("button:has-text('Lanjut'), button:has-text('Kirim')")
+                lanjut_button = page.locator("button").filter(has_text=re.compile(r"^\s*Lanjut\s*$", re.IGNORECASE)).last
+                if await lanjut_button.count() == 0:
+                    lanjut_button = page.get_by_role("button", name=re.compile(r"^\s*Lanjut\s*$", re.IGNORECASE)).last
+                if await lanjut_button.count() == 0:
+                    raise Exception("Tombol Lanjut tidak ditemukan")
+
+                await lanjut_button.scroll_into_view_if_needed()
+                await page.wait_for_function(
+                    "button => !button.disabled",
+                    arg=await lanjut_button.element_handle(),
+                    timeout=10000
+                )
+                await lanjut_button.click(force=True, timeout=15000)
+                await asyncio.sleep(1)
+            except Exception as e:
+                logger.error(f"Error menekan tombol Lanjut: {e}")
+                await page.screenshot(path=debug_path)
+                raise Exception("Error: Tombol Lanjut tidak dapat ditekan.")
 
             logger.info("Menunggu OTP...")
             await status_callback(f"⏳ [LOG: 5/7] Menunggu OTP masuk ke `{temp.email}`...")
