@@ -18,10 +18,25 @@ TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "BOT_TOKENMU")
 GROUP_ID = int(os.getenv("GROUP_ID", "-1003928341140"))
 CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "@esimjwf")
 ADMIN_ID = 1294583646
-RUN2MAIL_BASE_URL = os.getenv("RUN2MAIL_BASE_URL", "https://run2mail.com")
-RUN2MAIL_API_KEY = os.getenv("RUN2MAIL_API_KEY", "")
-RUN2MAIL_EMAIL = os.getenv("RUN2MAIL_EMAIL", "")
-RUN2MAIL_INBOX_ID = os.getenv("RUN2MAIL_INBOX_ID", "")
+
+# --- ENV: generic / single master key ---
+APIKEY_MASTER = (
+    os.getenv("APIKEY_MASTER")
+    or os.getenv("RAPIDAPI_KEY")
+    or os.getenv("RUN2MAIL_API_KEY")
+    or os.getenv("TEMPMAIL_API_KEY")
+    or ""
+).strip()
+
+EMAIL_PROVIDER_BASE_URL = (
+    os.getenv("EMAIL_PROVIDER_BASE_URL")
+    or os.getenv("RUN2MAIL_BASE_URL")
+    or os.getenv("TEMPMAIL_BASE_URL")
+    or "https://run2mail.com"
+).strip()
+
+EMAIL_ACCOUNT = os.getenv("EMAIL_ACCOUNT") or os.getenv("RUN2MAIL_EMAIL") or ""
+EMAIL_INBOX_ID = os.getenv("EMAIL_INBOX_ID") or os.getenv("RUN2MAIL_INBOX_ID") or ""
 
 app = FastAPI()
 telegram_app = None
@@ -42,11 +57,19 @@ async def is_user_joined(context, user_id):
 
 class Run2MailBot:
     def __init__(self):
-        self.base_url = os.getenv("RUN2MAIL_BASE_URL", "https://run2mail.com")
-        self.api_key = os.getenv("RUN2MAIL_API_KEY", "")
-        self.email = os.getenv("RUN2MAIL_EMAIL", "")
-        self.inbox_id = os.getenv("RUN2MAIL_INBOX_ID", "")
-        self.headers = {"Authorization": f"Bearer {self.api_key}", "Accept": "application/json"} if self.api_key else {"Accept": "application/json"}
+        self.base_url = EMAIL_PROVIDER_BASE_URL
+        self.api_key = APIKEY_MASTER
+        self.email = EMAIL_ACCOUNT
+        self.inbox_id = EMAIL_INBOX_ID
+        self.auth_mode = "rapidapi" if "rapidapi" in self.base_url.lower() else "bearer"
+        self.headers = {"Accept": "application/json"}
+
+        if self.api_key:
+            if self.auth_mode == "rapidapi":
+                self.headers["x-rapidapi-key"] = self.api_key
+                self.headers["x-rapidapi-host"] = self.base_url.replace("https://", "").replace("http://", "").rstrip("/")
+            else:
+                self.headers["Authorization"] = f"Bearer {self.api_key}"
 
     def _normalize_text(self, value):
         if value is None:
@@ -84,6 +107,10 @@ class Run2MailBot:
         if json is not None:
             headers["Content-Type"] = "application/json"
 
+        if self.auth_mode == "rapidapi":
+            headers.setdefault("x-rapidapi-key", self.api_key)
+            headers.setdefault("x-rapidapi-host", self.base_url.replace("https://", "").replace("http://", "").rstrip("/"))
+
         async with aiohttp.ClientSession(headers=headers) as session:
             async with session.request(method, url, json=json, params=params) as r:
                 text = await r.text()
@@ -94,11 +121,11 @@ class Run2MailBot:
 
     async def create_account(self):
         if self.email:
-            logger.info(f"Run2Mail inbox dipakai: {self.email}")
+            logger.info(f"Inbox email yang dipakai: {self.email}")
             return
 
         if not self.api_key:
-            raise RuntimeError("RUN2MAIL_API_KEY belum diisi di Railway / environment.")
+            raise RuntimeError("APIKEY_MASTER belum diisi di Railway / environment.")
 
         payload = {"type": "gmail"}
         url = f"{self.base_url.rstrip('/')}/api/v1/emails/create"
