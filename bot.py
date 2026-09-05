@@ -36,6 +36,10 @@ RAPIDAPI_HOST = (
     or "free-gmail-api.p.rapidapi.com"
 ).strip().replace("https://", "").replace("http://", "").rstrip("/")
 
+# Force the bot to use the active provider when stale env vars still point to old temporary-mail APIs.
+if "temporary-gmail-account" in RAPIDAPI_HOST or "run2mail" in RAPIDAPI_HOST or "tempmail" in RAPIDAPI_HOST:
+    RAPIDAPI_HOST = "free-gmail-api.p.rapidapi.com"
+
 EMAIL_PROVIDER_BASE_URL = f"https://{RAPIDAPI_HOST}"
 EMAIL_ACCOUNT = os.getenv("EMAIL_ACCOUNT") or os.getenv("RUN2MAIL_EMAIL") or ""
 EMAIL_INBOX_ID = os.getenv("EMAIL_INBOX_ID") or os.getenv("RUN2MAIL_INBOX_ID") or ""
