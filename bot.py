@@ -9,6 +9,7 @@ from fastapi import FastAPI, Request, Response
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 from playwright.async_api import async_playwright
+from urllib.parse import urlparse
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -18,6 +19,7 @@ GROUP_ID= -1001234567890
 CHANNEL_USERNAME= "@esimjwf"
 ADMIN_ID= 1294583646
 APIFY_API_TOKEN = os.getenv("APIFY_API_TOKEN", "")
+PLAYWRIGHT_PROXY = os.getenv("PLAYWRIGHT_PROXY", "")
 
 app = FastAPI()
 telegram_app = None
@@ -49,8 +51,9 @@ async def dismiss_cookie_popup(page):
 
     if await cookie_button.count() > 0 and await cookie_button.is_visible():
         try:
-            await cookie_button.click(force=True, timeout=5000)
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(random.uniform(0.8, 1.8))
+            await human_click(page, cookie_button)
+            await random_delay(0.3, 0.8)
             logger.info("Popup cookie ditutup")
         except Exception as e:
             logger.warning(f"Popup cookie ditemukan tetapi gagal ditutup: {e}")
@@ -68,6 +71,19 @@ async def is_user_joined(context, user_id):
     except Exception:
         return False
 
+def parse_proxy_url(proxy_url):
+    parsed = urlparse(proxy_url)
+    if not parsed.hostname:
+        return None
+    proxy_config = {
+        "server": f"{parsed.scheme}://{parsed.hostname}:{parsed.port or 80}",
+    }
+    if parsed.username:
+        proxy_config["username"] = parsed.username
+    if parsed.password:
+        proxy_config["password"] = parsed.password
+    return proxy_config
+
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
@@ -75,7 +91,7 @@ USER_AGENTS = [
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
 ]
 
-async def stealth_context(p):
+async def stealth_context(p, proxy_config=None):
     user_agent = random.choice(USER_AGENTS)
     viewport = {"width": random.choice([1366, 1440, 1536, 1920]), "height": random.choice([768, 900, 1024, 1080])}
     
@@ -93,18 +109,22 @@ async def stealth_context(p):
         ]
     )
     
-    context = await browser.new_context(
-        user_agent=user_agent,
-        viewport=viewport,
-        locale="id-ID",
-        timezone_id="Asia/Jakarta",
-        permissions=["geolocation"],
-        color_scheme="light",
-        device_scale_factor=random.choice([1, 1.25, 1.5]),
-        is_mobile=False,
-        has_touch=False,
-        java_script_enabled=True,
-    )
+    context_args = {
+        "user_agent": user_agent,
+        "viewport": viewport,
+        "locale": "id-ID",
+        "timezone_id": "Asia/Jakarta",
+        "permissions": ["geolocation"],
+        "color_scheme": "light",
+        "device_scale_factor": random.choice([1, 1.25, 1.5]),
+        "is_mobile": False,
+        "has_touch": False,
+        "java_script_enabled": True,
+    }
+    if proxy_config:
+        context_args["proxy"] = proxy_config
+    
+    context = await browser.new_context(**context_args)
     
     await context.add_init_script("""
         Object.defineProperty(navigator, 'webdriver', { get: () => false });
@@ -253,7 +273,8 @@ async def process_xl_esim(chat_id, status_callback, email=None):
     debug_path = f"debug_{chat_id}.png"
 
     async with async_playwright() as p:
-        browser, context = await stealth_context(p)
+        proxy_config = parse_proxy_url(PLAYWRIGHT_PROXY) if PLAYWRIGHT_PROXY else None
+        browser, context = await stealth_context(p, proxy_config=proxy_config)
         page = await context.new_page()
         await random_delay(1, 3)
         
