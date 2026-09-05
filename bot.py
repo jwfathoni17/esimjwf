@@ -19,6 +19,7 @@ TOKEN = "8877836310:AAHeAf-cAx2ho6MttbnHdA302fTl8b4UzBU"
 GROUP_ID = -1003928341140
 CHANNEL_USERNAME = "@esimjwf" 
 ADMIN_ID = 1294583646
+RUN2MAIL_API_KEY = r2m_jbh6mqogpq5ufzxsn5a4lbqzc1xwv
 
 app = FastAPI()
 telegram_app = None
@@ -38,208 +39,149 @@ async def is_user_joined(context, user_id):
         return False
 
 class MailTMBot:
-    """RapidAPI Temp Gmail API client.
+    """Run2Mail API client.
 
-    ONLY /get-email-dot is used to create addresses.
-    The daily counter is informational and never blocks requests.
+    Flow:
+      1. POST /api/v1/emails/create -> create a temporary inbox.
+      2. GET /api/v1/emails/{email}/messages -> poll incoming messages.
+
+    Set RUN2MAIL_API_KEY in the environment. Never hard-code the API key.
     """
 
-    # Tambahkan API key RapidAPI di sini.
-    # Bot memakai key secara bergantian dan mencoba key berikutnya
-    # jika key aktif gagal saat mengambil email.
-    RAPIDAPI_KEYS = [
-        "b9932d4795msh62a785bac6c469dp1da41ajsn7d45cb7133cf",
-        "1aed1ae514msh9675ccaa2db6bf0p17b6e8jsnbd03b34054f4",
-    ]
-    RAPIDAPI_HOST = "temp-gmail-api.p.rapidapi.com"
-    BASE_URL = "https://temp-gmail-api.p.rapidapi.com"
+    BASE_URL = "https://run2mail.com/api/v1"
 
     def __init__(self):
         self.email = ""
-        self.daily_count = self._load_counter()
-        self.key_index = 0
-        if not self.RAPIDAPI_KEYS:
-            raise RuntimeError("RAPIDAPI_KEYS kosong.")
-
-    def _counter_path(self):
-        return os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "rapidapi_usage.json"
-        )
-
-    def _load_counter(self):
-        today = datetime.now().strftime("%Y-%m-%d")
-        try:
-            with open(self._counter_path(), "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if data.get("date") == today:
-                return {"date": today, "count": int(data.get("count", 0))}
-        except Exception:
-            pass
-        return {"date": today, "count": 0}
-
-    def _save_counter(self):
-        try:
-            with open(self._counter_path(), "w", encoding="utf-8") as f:
-                json.dump(self.daily_count, f, indent=2)
-        except Exception as e:
-            logger.warning(f"Gagal menyimpan counter RapidAPI: {e}")
-
-    def _increment_counter(self):
-        today = datetime.now().strftime("%Y-%m-%d")
-        if self.daily_count.get("date") != today:
-            self.daily_count = {"date": today, "count": 0}
-        self.daily_count["count"] += 1
-        self._save_counter()
-
-    def usage_text(self):
-        today = datetime.now().strftime("%d-%m-%Y")
-        count = self.daily_count.get("count", 0)
-        return (
-            "📊 <b>RapidAPI Temp Gmail</b>\n"
-            "━━━━━━━━━━━━━━\n"
-            f"📧 Email /get-email-dot: <b>{count}</b>\n"
-            "🎯 Batas referensi: <b>10</b>\n"
-            "⚠️ Monitoring saja — <b>tidak membatasi</b>\n"
-            f"📅 {today}\n"
-            "━━━━━━━━━━━━━━"
-        )
-
-    def _rotate_key(self):
-        if len(self.RAPIDAPI_KEYS) > 1:
-            self.key_index = (self.key_index + 1) % len(self.RAPIDAPI_KEYS)
-            logger.info(f"Beralih ke RapidAPI key #{self.key_index + 1}/{len(self.RAPIDAPI_KEYS)}")
+        self.api_key = os.getenv("RUN2MAIL_API_KEY", "").strip()
+        if not self.api_key:
+            raise RuntimeError("RUN2MAIL_API_KEY belum diset.")
 
     def _headers(self):
         return {
-            "X-RapidAPI-Key": self.RAPIDAPI_KEYS[self.key_index],
-            "X-RapidAPI-Host": self.RAPIDAPI_HOST,
+            "Authorization": f"Bearer {self.api_key}",
             "Accept": "application/json",
             "Content-Type": "application/json",
         }
 
     @staticmethod
     def _extract_email(data):
-        candidates = []
+        """Extract an email address from the Run2Mail response."""
+        if isinstance(data, str):
+            candidates = [data]
+        else:
+            candidates = []
 
-        def walk(value):
-            if isinstance(value, str):
-                candidates.append(value.strip())
-            elif isinstance(value, dict):
-                for v in value.values():
-                    walk(v)
-            elif isinstance(value, list):
-                for v in value:
-                    walk(v)
+            def walk(value):
+                if isinstance(value, str):
+                    candidates.append(value.strip())
+                elif isinstance(value, dict):
+                    for v in value.values():
+                        walk(v)
+                elif isinstance(value, list):
+                    for v in value:
+                        walk(v)
 
-        walk(data)
+            walk(data)
 
         for candidate in candidates:
-            if re.fullmatch(r"[A-Za-z0-9._-]+@gmail\.com", candidate) and "+" not in candidate:
-                return candidate
+            match = re.search(
+                r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
+                candidate,
+            )
+            if match:
+                return match.group(0)
         return None
 
     async def create_account(self):
-        # Hanya endpoint /get-email-dot yang digunakan untuk membuat email.
-        url = f"{self.BASE_URL}/get-email-dot"
-        first = self.key_index
-        last_error = None
+        url = f"{self.BASE_URL}/emails/create"
+        payload = {"type": "random"}
 
-        for attempt in range(len(self.RAPIDAPI_KEYS)):
-            self.key_index = (first + attempt) % len(self.RAPIDAPI_KEYS)
-            masked = self.RAPIDAPI_KEYS[self.key_index][:6] + "..."
-            logger.info(
-                f"RapidAPI key #{self.key_index + 1}/{len(self.RAPIDAPI_KEYS)} "
-                f"({masked}) -> GET /get-email-dot"
-            )
+        logger.info("Run2Mail -> POST /emails/create")
 
-            try:
-                async with aiohttp.ClientSession(
-                    timeout=aiohttp.ClientTimeout(total=20)
-                ) as session:
-                    async with session.get(url, headers=self._headers()) as r:
-                        raw = await r.text()
+        try:
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=20)
+            ) as session:
+                async with session.post(
+                    url,
+                    headers=self._headers(),
+                    json=payload,
+                ) as r:
+                    raw = await r.text()
 
-                        if r.status != 200:
-                            last_error = RuntimeError(
-                                f"RapidAPI key #{self.key_index + 1} "
-                                f"/get-email-dot gagal ({r.status}): {raw[:500]}"
-                            )
-                            logger.warning(str(last_error))
-                            continue
+                    try:
+                        data = json.loads(raw)
+                    except Exception:
+                        data = raw
 
-                        try:
-                            data = json.loads(raw)
-                        except Exception:
-                            data = raw
-
-                        email = self._extract_email(data)
-                        if not email:
-                            last_error = RuntimeError(
-                                "RapidAPI /get-email-dot tidak mengembalikan "
-                                f"Gmail dot yang valid: {raw[:1000]}"
-                            )
-                            logger.warning(str(last_error))
-                            continue
-
-                        if "+" in email or not email.lower().endswith("@gmail.com"):
-                            last_error = RuntimeError(
-                                f"Email ditolak karena bukan Gmail dot: {email}"
-                            )
-                            logger.warning(str(last_error))
-                            continue
-
-                        self.email = email
-                        self._increment_counter()
-                        logger.info(
-                            f"RapidAPI /get-email-dot berhasil memakai key "
-                            f"#{self.key_index + 1}: {self.email} | "
-                            f"pemakaian hari ini: {self.daily_count['count']}"
+                    if r.status != 200:
+                        raise RuntimeError(
+                            f"Run2Mail /emails/create gagal ({r.status}): {raw[:1000]}"
                         )
-                        return self.email
 
-            except Exception as e:
-                last_error = e
-                logger.warning(
-                    f"RapidAPI key #{self.key_index + 1} error: {e}"
-                )
+                    if isinstance(data, dict) and data.get("success") is False:
+                        raise RuntimeError(
+                            f"Run2Mail menolak pembuatan inbox: {raw[:1000]}"
+                        )
 
-        raise RuntimeError(
-            f"Semua {len(self.RAPIDAPI_KEYS)} API key RapidAPI gagal. "
-            f"Error terakhir: {last_error}"
-        )
+                    email = self._extract_email(data)
+                    if not email:
+                        raise RuntimeError(
+                            f"Run2Mail tidak mengembalikan alamat email: {raw[:1000]}"
+                        )
+
+                    self.email = email
+                    logger.info(f"Run2Mail inbox berhasil dibuat: {self.email}")
+                    return self.email
+
+        except aiohttp.ClientError as e:
+            raise RuntimeError(f"Koneksi ke Run2Mail gagal: {e}") from e
 
     async def _get_messages(self, session):
-        url = f"{self.BASE_URL}/get-mails"
-        payload = {"email": self.email, "count": 10}
+        if not self.email:
+            raise RuntimeError("Email Run2Mail belum dibuat.")
 
-        async with session.post(
+        # Email dimasukkan ke URL sebagai path segment.
+        from urllib.parse import quote
+        encoded_email = quote(self.email, safe="")
+        url = f"{self.BASE_URL}/emails/{encoded_email}/messages"
+
+        async with session.get(
             url,
             headers=self._headers(),
-            json=payload,
             timeout=aiohttp.ClientTimeout(total=20),
         ) as r:
             raw = await r.text()
 
-            if r.status != 200:
-                raise RuntimeError(
-                    f"RapidAPI /get-mails gagal ({r.status}) "
-                    f"[key #{self.key_index + 1}]: {raw[:500]}"
-                )
-
             try:
                 data = json.loads(raw)
             except Exception:
-                return []
+                data = None
+
+            if r.status != 200:
+                raise RuntimeError(
+                    f"Run2Mail /emails/{{email}}/messages gagal "
+                    f"({r.status}): {raw[:1000]}"
+                )
 
             if isinstance(data, list):
                 return data
 
             if isinstance(data, dict):
-                for key in ("emails", "mails", "messages", "results", "data"):
-                    value = data.get(key)
-                    if isinstance(value, list):
-                        return value
+                # Dokumentasi Run2Mail memakai:
+                # {"success": true, "data": {"email": "...", "messages": []}}
+                container = data.get("data", data)
+
+                if isinstance(container, dict):
+                    messages = container.get("messages")
+                    if isinstance(messages, list):
+                        return messages
+
+                    # Fallback untuk kemungkinan format API lain.
+                    for key in ("emails", "mails", "results"):
+                        value = container.get(key)
+                        if isinstance(value, list):
+                            return value
 
             return []
 
@@ -249,15 +191,19 @@ class MailTMBot:
             return str(msg)
 
         parts = []
-        for key in ("sender", "from", "title", "subject", "body", "html", "text", "content"):
+        for key in (
+            "sender", "from", "to", "title", "subject",
+            "body", "html", "text", "content", "snippet"
+        ):
             value = msg.get(key)
             if value:
                 parts.append(str(value))
+
         return "\n".join(parts)
 
     async def fetch_otp(self, timeout=120):
         if not self.email:
-            raise RuntimeError("Email RapidAPI belum dibuat.")
+            raise RuntimeError("Email Run2Mail belum dibuat.")
 
         start_time = asyncio.get_event_loop().time()
         seen = set()
@@ -274,46 +220,62 @@ class MailTMBot:
                 try:
                     messages = await self._get_messages(session)
                     logger.info(
-                        f"RapidAPI poll #{poll_no}: {len(messages)} pesan "
-                        f"untuk {self.email} (key #{self.key_index + 1})"
+                        f"Run2Mail poll #{poll_no}: {len(messages)} pesan "
+                        f"untuk {self.email}"
                     )
 
                     for msg in messages:
-                        msg_id = str(msg.get("id", "")) if isinstance(msg, dict) else ""
+                        msg_id = ""
+                        if isinstance(msg, dict):
+                            msg_id = str(
+                                msg.get("id")
+                                or msg.get("message_id")
+                                or msg.get("uid")
+                                or ""
+                            )
+
                         if msg_id and msg_id in seen:
                             continue
                         if msg_id:
                             seen.add(msg_id)
 
                         content = self._content(msg)
+
                         if isinstance(msg, dict):
                             sender = msg.get("sender", msg.get("from", ""))
                             title = msg.get("title", msg.get("subject", ""))
-                            logger.info(f"RapidAPI email: from={sender} subject={title!r}")
+                            logger.info(
+                                f"Run2Mail email: from={sender} subject={title!r}"
+                            )
 
                         # Prioritaskan pola OTP yang eksplisit.
                         match = re.search(
                             r"(?:otp|verification\s*code|security\s*code|"
                             r"kode\s*(?:otp|verifikasi|konfirmasi))"
-                            r"\s*(?:is|adalah|:)?\s*([0-9]{4,8})",
-                            content, re.IGNORECASE,
+                            r"\s*(?:is|adalah|:|-)?\s*([0-9]{4,8})",
+                            content,
+                            re.IGNORECASE,
                         )
+
                         if match:
                             otp = match.group(1)
-                            logger.info(f"OTP RapidAPI ditemukan: {otp}")
+                            logger.info(f"OTP Run2Mail ditemukan: {otp}")
                             return otp
 
-                        candidates = re.findall(r"(?<!\d)\d{6}(?!\d)", content)
+                        # Fallback: kode 6 digit.
+                        candidates = re.findall(
+                            r"(?<!\d)\d{6}(?!\d)",
+                            content,
+                        )
                         if candidates:
-                            logger.info(f"OTP 6 digit RapidAPI ditemukan: {candidates[0]}")
+                            logger.info(
+                                f"OTP 6 digit Run2Mail ditemukan: {candidates[0]}"
+                            )
                             return candidates[0]
 
                 except Exception as e:
                     last_error = e
-                    logger.error(f"Error fetch OTP RapidAPI: {e}")
-                    # Jika endpoint polling gagal (mis. quota/rate-limit/key error),
-                    # pindah ke key berikutnya. Tidak mengubah email yang sedang ditunggu.
-                    self._rotate_key()
+                    logger.error(f"Error fetch OTP Run2Mail: {e}")
 
                 await asyncio.sleep(3)
 
@@ -322,13 +284,16 @@ class MailTMBot:
             f"Error API terakhir: {last_error}"
         )
 
-    async def fetch_xl_confirmation_email(self, timeout=120):
+    async def fetch_xl_confirmation_email(self, timeout=60):
         if not self.email:
-            raise RuntimeError("Email RapidAPI belum dibuat.")
+            raise RuntimeError("Email Run2Mail belum dibuat.")
 
         start_time = asyncio.get_event_loop().time()
+        last_error = None
 
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=25)
+        ) as session:
             while asyncio.get_event_loop().time() - start_time < timeout:
                 try:
                     messages = await self._get_messages(session)
@@ -337,15 +302,24 @@ class MailTMBot:
                         content = self._content(msg)
                         haystack = content.lower()
 
-                        if any(x in haystack for x in ("xl", "xlaxiata", "myxl")):
+                        if any(
+                            x in haystack
+                            for x in ("xl", "xlaxiata", "myxl")
+                        ):
                             return content
 
                 except Exception as e:
-                    logger.error(f"Error membaca email konfirmasi RapidAPI: {e}")
+                    last_error = e
+                    logger.error(
+                        f"Error membaca email konfirmasi Run2Mail: {e}"
+                    )
 
                 await asyncio.sleep(3)
 
-        raise TimeoutError("Email konfirmasi XL tidak diterima.")
+        raise TimeoutError(
+            f"Email konfirmasi XL tidak diterima dalam {timeout} detik "
+            f"untuk {self.email}. Error terakhir: {last_error}"
+        )
 
 
 async def process_xl_esim(chat_id, status_callback):
@@ -552,7 +526,8 @@ async def process_xl_esim(chat_id, status_callback):
             if os.path.exists(debug_path):
                 os.remove(debug_path)
                 
-            info, ms, pk, sm, ac = await temp.fetch_xl_confirmation_email(timeout=60)
+            info = await temp.fetch_xl_confirmation_email(timeout=60)
+                ms = pk = sm = ac = None
                 
             return screenshot_path, info, ms, pk, sm, ac
 
