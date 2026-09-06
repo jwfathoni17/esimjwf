@@ -9,8 +9,6 @@ from fastapi import FastAPI, Request, Response
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 from playwright.async_api import async_playwright
-from playwright_stealth import stealth_async
-import playwright
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -239,25 +237,64 @@ async def process_xl_esim(chat_id, status_callback, email=None):
             await status_callback("🌐 [LOG: 1/7] Membuka halaman XL eSIM Trial...")
             await page.goto("https://www.xl.co.id/esim-trial/claim", timeout=90000, wait_until="domcontentloaded")
             
-            await stealth_async(page)
-            await page.evaluate("""
-                () => {
-                    Object.defineProperty(navigator, 'webdriver', {
-                        get: () => undefined
-                    });
-                    delete navigator.__proto__.webdriver;
-                }
-            """)
-            await page.evaluate("""
-                () => {
-                    Object.defineProperty(navigator, 'plugins', {
-                        get: () => [1, 2, 3, 4, 5]
-                    });
-                    Object.defineProperty(navigator, 'languages', {
-                        get: () => ['id-ID', 'id', 'en-US', 'en']
-                    });
-                }
-            """)
+            async def stealth_patch(page):
+                await page.evaluate("""
+                    () => {
+                        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                        delete navigator.__proto__.webdriver;
+                    }
+                """)
+                await page.evaluate("""
+                    () => {
+                        Object.defineProperty(navigator, 'plugins', {
+                            get: () => [1, 2, 3, 4, 5]
+                        });
+                        Object.defineProperty(navigator, 'languages', {
+                            get: () => ['id-ID', 'id', 'en-US', 'en']
+                        });
+                    }
+                """)
+                await page.evaluate("""
+                    () => {
+                        window.chrome = { runtime: {}, loadTimes: function(){}, csi: function(){}, app: {} };
+                        const originalQuery = window.navigator.permissions.query;
+                        window.navigator.permissions.query = (parameters) =>
+                            parameters.name === 'notifications'
+                                ? Promise.resolve({ state: Notification.permission })
+                                : originalQuery(parameters);
+                    }
+                """)
+                await page.evaluate("""
+                    () => {
+                        Object.defineProperty(navigator, 'connection', {
+                            get: () => ({ effectiveType: '4g', rtt: 50, downlink: 10, saveData: false })
+                        });
+                        Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+                        Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+                        Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 10 });
+                        Object.defineProperty(navigator, 'vendor', { get: () => 'Google Inc.' });
+                        Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+                    }
+                """)
+                await page.evaluate("""
+                    () => {
+                        Object.defineProperty(document, 'visibilityState', { get: () => 'visible' });
+                        Object.defineProperty(document, 'hidden', { get: () => false });
+                    }
+                """)
+                await page.evaluate("""
+                    () => {
+                        const originalAddEventListener = window.addEventListener;
+                        window.addEventListener = function(type, listener, options) {
+                            if (type === 'webdriver' || type === 'automation' || type === 'selenium') {
+                                return;
+                            }
+                            return originalAddEventListener.call(this, type, listener, options);
+                        };
+                    }
+                """)
+
+            await stealth_patch(page)
             
             await dismiss_cookie_popup(page)
             await human_like_delay(2, 4)
