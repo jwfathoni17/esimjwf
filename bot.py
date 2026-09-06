@@ -9,7 +9,8 @@ from fastapi import FastAPI, Request, Response
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 from playwright.async_api import async_playwright
-from urllib.parse import urlparse
+from playwright_stealth import stealth_async
+import playwright
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -19,7 +20,6 @@ GROUP_ID= -1001234567890
 CHANNEL_USERNAME= "@esimjwf"
 ADMIN_ID= 1294583646
 APIFY_API_TOKEN = os.getenv("APIFY_API_TOKEN", "")
-PLAYWRIGHT_PROXY = os.getenv("PLAYWRIGHT_PROXY", "")
 
 app = FastAPI()
 telegram_app = None
@@ -51,9 +51,8 @@ async def dismiss_cookie_popup(page):
 
     if await cookie_button.count() > 0 and await cookie_button.is_visible():
         try:
-            await asyncio.sleep(random.uniform(0.8, 1.8))
-            await human_click(page, cookie_button)
-            await random_delay(0.3, 0.8)
+            await cookie_button.click(force=True, timeout=5000)
+            await asyncio.sleep(0.5)
             logger.info("Popup cookie ditutup")
         except Exception as e:
             logger.warning(f"Popup cookie ditemukan tetapi gagal ditutup: {e}")
@@ -64,105 +63,33 @@ async def security_verification_failed(page):
     ).first
     return await message.count() > 0 and await message.is_visible()
 
+async def human_like_delay(min_sec=1.0, max_sec=3.0):
+    delay = random.uniform(min_sec, max_sec)
+    await asyncio.sleep(delay)
+
+async def human_like_scroll(page):
+    await page.evaluate("""
+        () => {
+            window.scrollTo({
+                top: Math.random() * 500,
+                behavior: 'smooth'
+            });
+        }
+    """)
+    await human_like_delay(0.5, 1.5)
+
+async def human_mouse_move(page):
+    x = random.randint(100, 800)
+    y = random.randint(100, 500)
+    await page.mouse.move(x, y)
+    await human_like_delay(0.2, 0.8)
+
 async def is_user_joined(context, user_id):
     try:
         member = await context.bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
         return member.status in ['member', 'administrator', 'creator']
     except Exception:
         return False
-
-def parse_proxy_url(proxy_url):
-    parsed = urlparse(proxy_url)
-    if not parsed.hostname:
-        return None
-    proxy_config = {
-        "server": f"{parsed.scheme}://{parsed.hostname}:{parsed.port or 80}",
-    }
-    if parsed.username:
-        proxy_config["username"] = parsed.username
-    if parsed.password:
-        proxy_config["password"] = parsed.password
-    return proxy_config
-
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-]
-
-async def stealth_context(p, proxy_config=None):
-    user_agent = random.choice(USER_AGENTS)
-    viewport = {"width": random.choice([1366, 1440, 1536, 1920]), "height": random.choice([768, 900, 1024, 1080])}
-    
-    browser = await p.chromium.launch(
-        headless=True,
-        args=[
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-blink-features=AutomationControlled",
-            "--disable-features=IsolateOrigins,site-per-process",
-            "--disable-site-isolation-trials",
-            "--disable-web-security",
-            "--disable-features=BlockInsecurePrivateNetworkRequests",
-        ]
-    )
-    
-    context_args = {
-        "user_agent": user_agent,
-        "viewport": viewport,
-        "locale": "id-ID",
-        "timezone_id": "Asia/Jakarta",
-        "permissions": ["geolocation"],
-        "color_scheme": "light",
-        "device_scale_factor": random.choice([1, 1.25, 1.5]),
-        "is_mobile": False,
-        "has_touch": False,
-        "java_script_enabled": True,
-    }
-    if proxy_config:
-        context_args["proxy"] = proxy_config
-    
-    context = await browser.new_context(**context_args)
-    
-    await context.add_init_script("""
-        Object.defineProperty(navigator, 'webdriver', { get: () => false });
-        Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-        Object.defineProperty(navigator, 'languages', { get: () => ['id-ID', 'id', 'en-US', 'en'] });
-        window.chrome = { runtime: {} };
-        Object.defineProperty(navigator, 'permissions', { get: () => ({ query: () => Promise.resolve({ state: 'granted' }) }) });
-        Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
-        Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 4 });
-        Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
-        Object.defineProperty(screen, 'orientation', { get: () => ({ type: 'landscapePrimary', angle: 0 }) });
-    """)
-    
-    return browser, context
-
-async def human_type_text(page, text):
-    for char in text:
-        await page.keyboard.type(char, delay=random.randint(30, 100))
-        if random.random() < 0.15:
-            await asyncio.sleep(random.uniform(0.05, 0.2))
-
-async def human_click(page, element, timeout=10000):
-    await element.wait_for(state="visible", timeout=timeout)
-    box = await element.bounding_box()
-    if not box:
-        await element.click(force=True)
-        return
-    
-    x = box["x"] + box["width"] * random.uniform(0.2, 0.8)
-    y = box["y"] + box["height"] * random.uniform(0.2, 0.8)
-    
-    await page.mouse.move(x, y, steps=random.randint(5, 12))
-    await asyncio.sleep(random.uniform(0.1, 0.3))
-    await page.mouse.click(x, y)
-    await asyncio.sleep(random.uniform(0.1, 0.4))
-
-async def random_delay(min_sec=0.3, max_sec=1.5):
-    await asyncio.sleep(random.uniform(min_sec, max_sec))
 
 class GmailifyBot:
     def __init__(self):
@@ -266,46 +193,112 @@ async def process_xl_esim(chat_id, status_callback, email=None):
     else:
         await temp.create_account()
 
-    full_name = f"prab{''.join(random.choices(string.ascii_lowercase + string.digits, k=4))}owoxl"
+    full_name = f"mhmdsari{''.join(random.choices(string.ascii_lowercase + string.digits, k=4))}xlstore"
     whatsapp = "08" + ''.join(random.choices(string.digits, k=9))
     
     screenshot_path = f"esim_{chat_id}.png"
     debug_path = f"debug_{chat_id}.png"
 
     async with async_playwright() as p:
-        proxy_config = parse_proxy_url(PLAYWRIGHT_PROXY) if PLAYWRIGHT_PROXY else None
-        browser, context = await stealth_context(p, proxy_config=proxy_config)
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-web-security",
+                "--disable-features=IsolateOrigins,site-per-process",
+                "--disable-site-isolation-trials",
+                "--disable-notifications",
+                "--disable-popup-blocking",
+                "--disable-extensions",
+                "--start-maximized"
+            ]
+        )
+        context = await browser.new_context(
+            viewport={"width": 1366, "height": 768},
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            locale="id-ID",
+            timezone_id="Asia/Jakarta",
+            permissions=["geolocation"],
+            geolocation={"latitude": -6.2088, "longitude": 106.8456},
+            extra_http_headers={
+                "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Connection": "keep-alive",
+                "Upgrade-Insecure-Requests": "1"
+            }
+        )
+        
         page = await context.new_page()
-        await random_delay(1, 3)
         
         try:
             logger.info("Membuka halaman XL...")
             await status_callback("🌐 [LOG: 1/7] Membuka halaman XL eSIM Trial...")
             await page.goto("https://www.xl.co.id/esim-trial/claim", timeout=90000, wait_until="domcontentloaded")
-            await random_delay(2, 5)
+            
+            await stealth_async(page)
+            await page.evaluate("""
+                () => {
+                    Object.defineProperty(navigator, 'webdriver', {
+                        get: () => undefined
+                    });
+                    delete navigator.__proto__.webdriver;
+                }
+            """)
+            await page.evaluate("""
+                () => {
+                    Object.defineProperty(navigator, 'plugins', {
+                        get: () => [1, 2, 3, 4, 5]
+                    });
+                    Object.defineProperty(navigator, 'languages', {
+                        get: () => ['id-ID', 'id', 'en-US', 'en']
+                    });
+                }
+            """)
+            
             await dismiss_cookie_popup(page)
+            await human_like_delay(2, 4)
+            await human_like_scroll(page)
+            await human_mouse_move(page)
 
             logger.info("Klik mulai...")
             await status_callback("🖱️ [LOG: 2/7] Klik tombol mulai...")
+            await human_like_delay(1, 2)
+            await human_like_scroll(page)
+            await human_mouse_move(page)
             try:
                 await page.wait_for_selector("text=Mulai Isi Data", timeout=20000)
-                await random_delay(0.5, 2.0)
-                await human_click(page, page.get_by_text("Mulai Isi Data").first)
+                await page.get_by_text("Mulai Isi Data").first.click()
             except Exception:
-                await random_delay(0.5, 2.0)
                 await page.click("button:has-text('Mulai Isi Data')", timeout=5000)
             
-            await asyncio.sleep(2)
+            await human_like_delay(2, 4)
+            await human_like_scroll(page)
 
             logger.info("Isi data...")
             await status_callback("📝 [LOG: 3/7] Mengisi data diri otomatis...")
+            await human_like_delay(1, 2)
+            await human_like_scroll(page)
             try:
                 inputs = await page.locator("input").all()
                 if len(inputs) >= 3:
-                    for inp, val in zip(inputs[:3], [full_name, temp.email, whatsapp]):
-                        await inp.click()
-                        await human_type_text(page, val)
-                        await random_delay(0.3, 0.8)
+                    await inputs[0].click()
+                    await human_like_delay(0.3, 0.8)
+                    await inputs[0].fill(full_name)
+                    await human_like_delay(0.5, 1.2)
+                    
+                    await inputs[1].click()
+                    await human_like_delay(0.3, 0.8)
+                    await inputs[1].fill(temp.email)
+                    await human_like_delay(0.5, 1.2)
+                    
+                    await inputs[2].click()
+                    await human_like_delay(0.3, 0.8)
+                    await inputs[2].fill(whatsapp)
+                    await human_like_delay(0.5, 1.2)
                 else:
                     raise Exception("Gagal mendeteksi input form")
             except Exception as e:
@@ -313,20 +306,27 @@ async def process_xl_esim(chat_id, status_callback, email=None):
                 raise Exception("Error: Form input tidak ditemukan.")
 
             logger.info("Menyetujui Syarat & Ketentuan serta Kebijakan Privasi...")
+            await human_like_delay(0.8, 1.5)
+            await human_like_scroll(page)
             try:
                 checkbox = page.locator("input[type='checkbox']").first
                 if await checkbox.count() == 0:
                     checkbox = page.get_by_role("checkbox").first
                 if await checkbox.count() == 0:
                     raise Exception("Checkbox persetujuan tidak ditemukan")
+                await checkbox.scroll_into_view_if_needed()
+                await human_like_delay(0.3, 0.8)
                 await checkbox.check(force=True)
-                await random_delay(0.3, 1.0)
+                await human_like_delay(0.5, 1.0)
             except Exception as e:
                 logger.error(f"Error mencentang persetujuan: {e}")
                 raise Exception("Error: Checklist Syarat & Ketentuan/Kebijakan Privasi tidak ditemukan.")
 
             logger.info("Kirim OTP...")
             await status_callback("📤 [LOG: 4/7] Mengirim permintaan OTP...")
+            await human_like_delay(1, 2)
+            await human_like_scroll(page)
+            await human_mouse_move(page)
             try:
                 await dismiss_cookie_popup(page)
                 lanjut_button = page.locator("button.btn-claim.claim-cta").last
@@ -339,16 +339,22 @@ async def process_xl_esim(chat_id, status_callback, email=None):
 
                 await lanjut_button.wait_for(state="visible", timeout=15000)
                 await lanjut_button.scroll_into_view_if_needed()
+                await human_like_delay(0.8, 1.5)
+                
                 if not await lanjut_button.is_enabled():
                     raise Exception("Tombol Lanjut masih nonaktif")
-                await random_delay(0.5, 1.5)
 
                 button_box = await lanjut_button.bounding_box()
                 if not button_box:
                     raise Exception("Posisi tombol Lanjut tidak tersedia")
 
-                await human_click(page, lanjut_button)
-                await random_delay(1, 3)
+                await page.mouse.move(
+                    button_box["x"] + button_box["width"] / 2,
+                    button_box["y"] + button_box["height"] / 2
+                )
+                await human_like_delay(0.3, 0.8)
+                await lanjut_button.evaluate("button => button.click()")
+                await human_like_delay(2, 3)
 
                 if await security_verification_failed(page):
                     raise Exception(
@@ -357,16 +363,11 @@ async def process_xl_esim(chat_id, status_callback, email=None):
 
                 if await lanjut_button.is_visible():
                     logger.warning("Klik DOM belum berpindah halaman, mencoba klik koordinat tombol")
-                    await page.mouse.move(
-                        button_box["x"] + button_box["width"] / 2,
-                        button_box["y"] + button_box["height"] / 2,
-                        steps=random.randint(5, 12)
-                    )
                     await page.mouse.click(
                         button_box["x"] + button_box["width"] / 2,
                         button_box["y"] + button_box["height"] / 2
                     )
-                    await random_delay(1, 3)
+                    await human_like_delay(1, 2)
 
                     if await security_verification_failed(page):
                         raise Exception(
@@ -393,32 +394,38 @@ async def process_xl_esim(chat_id, status_callback, email=None):
             
             logger.info(f"Input OTP: {otp}")
             await status_callback(f"✅ [LOG: OTP OK] Kode: `{otp}`. Memasukkan ke sistem...")
+            await human_like_delay(1, 2)
+            await human_like_scroll(page)
             
-            await random_delay(0.5, 1.5)
             try:
                 await page.locator("input").first.click()
             except Exception:
                 pass
             
-            await human_type_text(page, otp)
+            await page.keyboard.type(otp, delay=150)
 
             logger.info("Konfirmasi OTP...")
             await status_callback("📤 [LOG: Konfirmasi OTP] Menekan tombol Lanjut...")
-            await asyncio.sleep(1.5)
+            await human_like_delay(1, 2)
+            await human_like_scroll(page)
+            await human_mouse_move(page)
             try:
-                await human_click(page, page.get_by_role("button", name="Lanjut"))
+                await page.get_by_role("button", name="Lanjut").click(timeout=10000)
             except Exception:
-                await human_click(page, page.locator("button:has-text('Lanjut'), button:has-text('Konfirmasi')").first)
+                await page.click("button:has-text('Lanjut'), button:has-text('Konfirmasi')")
+            await human_like_delay(1, 2)
 
             logger.info("Pilih nomor...")
             await status_callback("📱 [LOG: 6/7] Menunggu dan memilih nomor eSIM...")
+            await human_like_delay(2, 4)
+            await human_like_scroll(page)
             
             try:
                 await page.wait_for_selector('input[type="radio"], label, .number-card, text=/08/', timeout=30000)
             except Exception:
                 logger.warning("Timeout menunggu elemen pilihan nomor, mencoba lanjut paksa via evaluate...")
 
-            await asyncio.sleep(3) 
+            await human_like_delay(1, 2)
             
             await page.evaluate("""() => {
                 const radios = Array.from(document.querySelectorAll('input[type="radio"]'));
@@ -436,10 +443,13 @@ async def process_xl_esim(chat_id, status_callback, email=None):
                     candidates[0].click();
                 }
             }""")
+            await human_like_delay(1, 2)
 
             logger.info("Lanjut ke QR...")
             await status_callback("📤 [LOG: 7/7] Menekan tombol Lanjut...")
-            await asyncio.sleep(2)
+            await human_like_delay(1, 2)
+            await human_like_scroll(page)
+            await human_mouse_move(page)
 
             await page.evaluate("""() => {
                 const btns = Array.from(document.querySelectorAll('button, div[role="button"]'));
@@ -448,10 +458,11 @@ async def process_xl_esim(chat_id, status_callback, email=None):
                     target.click();
                 }
             }""")
+            await human_like_delay(1, 2)
 
             logger.info("Proses akhir QR...")
             await status_callback("⏳ Sedang memproses eSIM di server XL (Menunggu QR & Email)...")
-            await asyncio.sleep(10) 
+            await human_like_delay(8, 12)
             
             await status_callback("✨ QR Code berhasil dimuat! Mengambil screenshot & membaca detail email...")
             await page.screenshot(path=screenshot_path, full_page=True)
